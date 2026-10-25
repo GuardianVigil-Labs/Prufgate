@@ -94,7 +94,9 @@ COPY . /tools/prufgate/
 # build backend come from the hash-locked requirements.txt, so nothing unpinned
 # is downloaded.
 RUN python3 -m pip install --no-cache-dir --require-hashes -r /tools/prufgate/requirements.txt && \
-    python3 -m pip install --no-cache-dir --no-deps --no-build-isolation /tools/prufgate && \
+    python3 -m pip wheel --no-cache-dir --no-deps --no-build-isolation -w /tmp/wheel /tools/prufgate && \
+    python3 -m pip install --no-cache-dir --no-deps /tmp/wheel/*.whl && \
+    rm -rf /tmp/wheel && \
     rm -rf /tools/prufgate/build /tools/prufgate/*.egg-info && \
     chmod +x /tools/prufgate/prufgate.sh /tools/prufgate/entrypoint.sh /tools/prufgate/bin/prufgate /tools/prufgate/runners/*.sh
 

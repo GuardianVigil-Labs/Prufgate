@@ -1,5 +1,5 @@
 # What the container and the fuzz build install (pip install --require-hashes),
 # so no unpinned package is downloaded while building PrufGate itself.
-# Regenerate: uv pip compile --universal --python-version 3.9 --generate-hashes requirements.in -o requirements.txt
+# Regenerate: uv pip compile --universal --python-version 3.11 --generate-hashes requirements.in -o requirements.txt
 PyYAML==6.0.3
-setuptools==80.9.0
+setuptools>=84.1.0
