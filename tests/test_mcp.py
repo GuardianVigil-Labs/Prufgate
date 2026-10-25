@@ -4,6 +4,7 @@ JSON-RPC 2.0 stdio loop (driven through a real subprocess)."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,10 @@ if str(PRUFGATE_ROOT) not in sys.path:
 
 from prufgate import __version__  # noqa: E402
 from prufgate.mcp import prufgate_mcp_server as mcp  # noqa: E402
+
+# Hermetic: CI exports these on pull requests; a test that needs a base ref sets it.
+for _ci_var in ("GITHUB_BASE_REF", "PRUFGATE_BASE_REF"):
+    os.environ.pop(_ci_var, None)
 
 TOOLS = {
     "prufgate_fast_scan", "prufgate_full_scan", "prufgate_anti_fabrication", "prufgate_test_audit",
