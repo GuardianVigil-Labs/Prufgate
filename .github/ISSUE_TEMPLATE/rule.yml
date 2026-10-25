@@ -1,0 +1,27 @@
+name: False positive or false negative
+description: A rule flagged correct code (false positive), or missed fabricated code, a hollow test or tampering (false negative).
+labels: [false-positive-or-negative]
+body:
+  - type: markdown
+    attributes:
+      value: "This repository is public. Use a minimal invented sample, never your private code."
+  - type: input
+    id: rule
+    attributes:
+      label: Rule id (from the report), or the engine if it was missed
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Minimal code sample
+      description: The smallest invented snippet that shows the problem, with its file name (for example src/orders/service.ts).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What PrufGate did, and what it should do
+    validations:
+      required: true

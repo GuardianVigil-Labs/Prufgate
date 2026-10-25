@@ -1,0 +1,38 @@
+target-version = "py39"
+line-length = 100
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "reports",
+    "tools",
+]
+
+[lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "S",     # flake8-bandit (security)
+    "ASYNC", # flake8-async
+    "B",     # flake8-bugbear
+    "I",     # isort
+]
+ignore = [
+    "S101", # assert allowed in tests
+    "E501", # line length handled separately
+    "S603", # subprocess call without shell=True
+    "S607", # start process with partial path
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E402", "S101", "S104", "S105", "S106", "S107", "S108", "S110", "S310", "S608"]
+"*test*" = ["E402", "S101", "S104", "S105", "S106", "S107", "S108", "S110", "S310", "S608"]
+"prufgate/*" = ["S104", "S105", "S106", "S107", "S108", "S110", "S112", "S310", "S314", "S608"]
+"scripts/*" = ["S101", "S105", "S106", "S603", "S607", "S110", "S112", "S608"]
+"docs/*" = ["S110", "S310"]
+

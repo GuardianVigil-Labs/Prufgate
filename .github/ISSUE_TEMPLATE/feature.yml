@@ -1,0 +1,33 @@
+name: Rule, pack or feature request
+description: A new rule or opt-in pack, a language or framework, or an integration.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: "This repository is public. Use a minimal invented sample, never your private code. Domain-specific rules (one industry or one stack) belong in an opt-in pack."
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What you are asking for
+      options:
+        - A new rule in an existing engine
+        - A new opt-in pack
+        - A language or framework
+        - An integration (CI, agent, editor, registry)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem it solves
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you propose
+      description: For a rule, an invented sample it must flag and a near miss it must not.
+      render: text
+    validations:
+      required: true

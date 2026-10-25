@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prufgate"
+dynamic = ["version"]
+description = "Catches fabricated logic, hollow tests, guardrail tampering and BOLA in code written by people and AI agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "PrufGate Maintainers" }
+]
+dependencies = [
+    "PyYAML>=6.0",
+]
+keywords = [
+    "security",
+    "mcp",
+    "model-context-protocol",
+    "bola",
+    "idor",
+    "sast",
+    "code-review",
+    "anti-fabrication",
+    "anti-reward-hacking",
+    "test-integrity"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing"
+]
+
+[project.urls]
+Homepage = "https://github.com/GuardianVigil-Labs/Prufgate"
+Documentation = "https://github.com/GuardianVigil-Labs/Prufgate/tree/main/docs"
+Source = "https://github.com/GuardianVigil-Labs/Prufgate"
+Issues = "https://github.com/GuardianVigil-Labs/Prufgate/issues"
+Changelog = "https://github.com/GuardianVigil-Labs/Prufgate/blob/main/CHANGELOG.md"
+
+[project.scripts]
+prufgate = "prufgate.cli:main"
+prufgate-mcp = "prufgate.mcp.prufgate_mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["prufgate*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "prufgate.__version__" }

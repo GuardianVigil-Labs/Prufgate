@@ -1,0 +1,15 @@
+# Nothing about where or by whom PrufGate was built goes into the image: no git
+# metadata (it carries author names and emails), no agent instructions, no
+# scan reports or caches.
+.git
+.github
+.claude
+.agents
+AGENTS.md
+CLAUDE.md
+reports/
+**/__pycache__/
+*.pyc
+.venv/
+.cursor/
+.ruff_cache/

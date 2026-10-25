@@ -1,0 +1,17 @@
+PrufGate
+Copyright 2026 GuardianVigil
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+The source distribution and the wheel bundle no third-party code. PrufGate
+depends on PyYAML (MIT licence), which pip installs separately.
+
+The container image (ghcr.io/guardianvigil-labs/prufgate) also contains, each
+under its own licence:
+- ast-grep, Copyright (c) 2022 Herrington Darkholme, MIT licence;
+- gitleaks, Copyright (c) 2019 Zachary Rice, MIT licence;
+- zizmor, Copyright (c) 2024 William Woodruff, MIT licence;
+- PyYAML, MIT licence;
+- the Python runtime and Debian packages of its base image
+  (python:3.14-slim-bookworm), under their respective licences; the image
+  SBOM, stored with the image in the registry, lists them.

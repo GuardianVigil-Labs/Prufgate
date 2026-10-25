@@ -1,0 +1,177 @@
+"""Unit tests for PrufGate Review Synthesizer (prufgate/synthesizer/parse_results.py).
+Tests all 6 core engine parsers, cross-engine deduplication, baseline filtering,
+execution manifest integration, and GitHub SARIF 2.1.0 URI normalization.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+PRUFGATE_ROOT = Path(__file__).resolve().parent.parent
+if str(PRUFGATE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PRUFGATE_ROOT))
+
+from prufgate.synthesizer.parse_results import (
+    Finding,
+    deduplicate_findings,
+    filter_baseline_findings,
+    generate_markdown,
+    generate_sarif,
+    load_execution_manifest,
+    parse_raw_results,
+)
+
+
+class SynthesizerTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.raw_dir = self.ws / "reports" / "raw"
+        self.raw_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_parses_all_six_core_engines_and_accelerators(self):
+        # Engine 1: anti-fabrication
+        (self.raw_dir / "anti_fabrication.json").write_text(
+            json.dumps([{"file": "src/api.ts", "line": 12, "rule": "canned-error-fallback", "snippet": "return { ok: true }"}]),
+            encoding="utf-8",
+        )
+        # Engine 2: test-integrity
+        (self.raw_dir / "test_integrity.json").write_text(
+            json.dumps([{"file": "tests/api.test.ts", "line": 4, "rule": "zero-assertion-test", "severity": "P0", "message": "Zero assertions"}]),
+            encoding="utf-8",
+        )
+        # Engine 3: diff-guard
+        (self.raw_dir / "diff_guard.json").write_text(
+            json.dumps([{"file": "tests/api.test.ts", "line": 10, "rule": "test-skip-smuggling", "severity": "P0", "message": "Unjustified skip"}]),
+            encoding="utf-8",
+        )
+        # Engine 4: contract-guard
+        (self.raw_dir / "contract_guard.json").write_text(
+            json.dumps([{"file": "src/index.ts", "line": 1, "rule": "undeclared-or-hallucinated-import", "severity": "P1", "message": "Ghost package"}]),
+            encoding="utf-8",
+        )
+        # Engine 5: bola-matrix
+        (self.raw_dir / "bola_matrix.json").write_text(
+            json.dumps([{"target": "src/routes.py", "line": 22, "rule_id": "BOLA-ID-QUERY-WITHOUT-TENANT-CONSTRAINT", "severity": "P0", "message": "Missing tenant filter"}]),
+            encoding="utf-8",
+        )
+        # Engine 6: pr-reviewer
+        (self.raw_dir / "pr_review.json").write_text(
+            json.dumps([{"file": "src/db.ts", "line": 30, "title": "SQL Injection Vector", "severity": "P0", "message": "Interpolated query"}]),
+            encoding="utf-8",
+        )
+        # Optional Gitleaks
+        (self.raw_dir / "gitleaks.json").write_text(
+            json.dumps([{"RuleID": "generic-api-key", "Description": "Generic API Key", "File": "src/config.ts", "StartLine": 5, "Match": "KEY=***"}]),
+            encoding="utf-8",
+        )
+        # Optional Zizmor
+        (self.raw_dir / "zizmor.json").write_text(
+            json.dumps([{"ident": "unpinned-uses", "desc": "unpinned action reference", "determinations": {"severity": "High"}}]),
+            encoding="utf-8",
+        )
+
+        findings = parse_raw_results(self.raw_dir)
+        tools = {f.tool for f in findings}
+        self.assertEqual(
+            tools,
+            {"anti-fabrication", "test-integrity", "diff-guard", "contract-guard", "bola-matrix", "pr-reviewer", "gitleaks", "zizmor"},
+        )
+        zizmor_finding = next(f for f in findings if f.tool == "zizmor")
+        self.assertEqual(zizmor_finding.severity, "P2")
+
+    def test_deduplication_merges_overlapping_findings(self):
+        f1 = Finding(
+            tool="ast-grep",
+            rule_id="server-action-auth-guard",
+            severity="P2",
+            message="Missing guard",
+            file_path="/workspace/src/actions.ts",
+            line=25,
+        )
+        f2 = Finding(
+            tool="pr-reviewer",
+            rule_id="pr-server-action-missing-authorization-guard",
+            severity="P1",
+            message="Missing guard",
+            file_path="src/actions.ts",
+            line=25,
+        )
+        deduped = deduplicate_findings([f1, f2])
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0].severity, "P1")
+        self.assertIn("Also detected by: pr-reviewer", deduped[0].details)
+
+    def test_baseline_suppression_supports_yaml_and_json_schemas(self):
+        (self.ws / ".prufgate").mkdir(exist_ok=True)
+        (self.ws / ".prufgate" / "baseline.yaml").write_text(
+            "ignore:\n"
+            "  - file_path: src/legacy.ts\n"
+            "    rule: undocumented-env-var-drift\n"
+            "  - file: src/only_this_file.ts\n",
+            encoding="utf-8",
+        )
+        findings = [
+            Finding(tool="contract-guard", rule_id="undocumented-env-var-drift", severity="P2", message="Env", file_path="src/legacy.ts", line=10),
+            Finding(tool="contract-guard", rule_id="undocumented-env-var-drift", severity="P2", message="Env", file_path="src/active.ts", line=10),
+        ]
+        filtered = filter_baseline_findings(findings, self.ws)
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].file_path, "src/active.ts")
+
+    def test_sarif_normalization_and_manifest_markdown(self):
+        manifest_path = self.raw_dir / "execution_manifest.jsonl"
+        manifest_path.write_text(
+            json.dumps({"tool": "anti-fabrication", "status": "executed", "exit_code": 0, "duration_seconds": 1.0, "note": "changed files"}) + "\n"
+            + json.dumps({"tool": "gitleaks", "status": "skipped", "exit_code": 0, "duration_seconds": 0.0, "note": "gitleaks binary not found"}) + "\n"
+            + json.dumps({"tool": "bola-matrix", "status": "executed", "exit_code": 2, "duration_seconds": 1.0, "note": "config error"}) + "\n",
+            encoding="utf-8",
+        )
+        manifest = load_execution_manifest(self.raw_dir)
+        self.assertEqual(manifest["anti-fabrication"]["status"], "executed")
+        self.assertEqual(manifest["gitleaks"]["detail"], "gitleaks binary not found")
+        self.assertEqual(manifest["bola-matrix"]["exit_code"], 2)
+
+        findings = [
+            Finding(
+                tool="bola-matrix",
+                rule_id="BOLA-CROSS-TENANT-READ",
+                severity="P0",
+                message="Dynamic endpoint flaw",
+                file_path="http://127.0.0.1:3000/api/v1/projects/2",
+                line=0,
+            ),
+            Finding(
+                tool="anti-fabrication",
+                rule_id="demo-named-data",
+                severity="P0",
+                message="Fake constant",
+                file_path="/workspace/./src/app.py",
+                line=14,
+            ),
+        ]
+
+        sarif_out = self.ws / "reports" / "prufgate.sarif"
+        generate_sarif(findings, sarif_out, workspace_dir=self.ws)
+        sarif_data = json.loads(sarif_out.read_text(encoding="utf-8"))
+        results = sarif_data["runs"][0]["results"]
+        self.assertEqual(results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "PRUFGATE_DYNAMIC_TARGET")
+        self.assertEqual(results[0]["locations"][0]["physicalLocation"]["region"]["startLine"], 1)
+        self.assertEqual(results[1]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "src/app.py")
+
+        md_out = self.ws / "reports" / "prufgate-review.md"
+        generate_markdown(findings, Path("/nonexistent/template.md"), md_out, manifest=manifest)
+        md_text = md_out.read_text(encoding="utf-8")
+        self.assertIn("`anti-fabrication`", md_text)
+        self.assertIn("⚪ SKIPPED (gitleaks binary not found)", md_text)
+
+
+if __name__ == "__main__":
+    unittest.main()

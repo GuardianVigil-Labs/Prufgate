@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# PrufGate: Universal Anti-Fabrication, Anti-Reward-Hacking & BOLA Verification CLI
+#
+# Usage:
+#   prufgate check [path] [--changed] [--format text|json|sarif|agent-hook]
+#   prufgate test-audit [path] [--changed]
+#   prufgate bola [path] [--url URL] [--static-only]
+#   prufgate review [--base REF] [--format markdown|json|sarif|github|reviewdog] [--ai]
+#   prufgate init [path] [--hooks]
+#   prufgate mcp | prufgate api | prufgate --self-check
+#   prufgate [fast | full]             # Run synthesized 6-engine gate (SARIF + Markdown)
+#   prufgate --docker [args...]        # Run inside the PrufGate container (build it first: prufgate --build)
+#
+
+set -euo pipefail
+
+DEFAULT_IMAGE="${PRUFGATE_IMAGE:-prufgate:latest}"
+
+# Locate PrufGate directory
+if [ -n "${PRUFGATE_DIR:-}" ] && [ -f "${PRUFGATE_DIR}/prufgate/cli.py" ]; then
+  :
+elif [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/prufgate/cli.py" ]; then
+  PRUFGATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+elif [ -f "$(pwd)/prufgate/cli.py" ]; then
+  PRUFGATE_DIR="$(pwd)"
+elif [ -f "/opt/prufgate/prufgate/cli.py" ]; then
+  PRUFGATE_DIR="/opt/prufgate"
+elif [ -f "/tools/prufgate/prufgate/cli.py" ]; then
+  PRUFGATE_DIR="/tools/prufgate"
+else
+  PRUFGATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+TARGET_WORKSPACE="$(pwd)"
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "help" ]; then
+  if command -v python3 >/dev/null 2>&1 && [ -f "${PRUFGATE_DIR}/prufgate/cli.py" ]; then
+    exec python3 "${PRUFGATE_DIR}/prufgate/cli.py" --help
+  fi
+  cat <<'HELP_EOF'
+PrufGate — Universal Anti-Fabrication, Anti-Reward-Hacking & BOLA Verification CLI
+
+Usage:
+  prufgate check [path] [--changed] [--format text|json|sarif|agent-hook]
+  prufgate test-audit [path] [--changed]
+  prufgate bola [path] [--url URL] [--static-only]
+  prufgate review [--base REF] [--format markdown|json|sarif|github|reviewdog] [--ai]
+  prufgate init [path] [--hooks]
+  prufgate mcp | prufgate api | prufgate --self-check
+  prufgate [fast | full]
+HELP_EOF
+  exit 0
+fi
+
+# Strip optional --standalone flag (native execution is now the default when python3 is available)
+USE_DOCKER=false
+FILTERED_ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--standalone" ]; then
+    continue
+  elif [ "$arg" = "--docker" ]; then
+    USE_DOCKER=true
+  else
+    FILTERED_ARGS+=("$arg")
+  fi
+done
+
+# Build local image if requested
+if [ "${1:-}" = "--build" ]; then
+  DOCKERFILE_PATH="${PRUFGATE_DIR}/Dockerfile"
+  BUILD_CONTEXT="${PRUFGATE_DIR}"
+  if [ ! -f "${DOCKERFILE_PATH}" ] && [ -f "$(pwd)/Dockerfile" ]; then
+    DOCKERFILE_PATH="$(pwd)/Dockerfile"
+    BUILD_CONTEXT="$(pwd)"
+  fi
+  echo "Building the PrufGate container image (prufgate:latest)..."
+  docker build -t "prufgate:latest" -f "${DOCKERFILE_PATH}" "${BUILD_CONTEXT}"
+  exit 0
+fi
+
+# Native Python / Orchestrator execution (Default when local source + Python 3 are present)
+if [ "$USE_DOCKER" = false ] && command -v python3 >/dev/null 2>&1 && [ -f "${PRUFGATE_DIR}/prufgate/cli.py" ]; then
+  FIRST_ARG="${FILTERED_ARGS[0]:-check}"
+  case "${FIRST_ARG}" in
+    fast|full|all)
+      exec bash "${PRUFGATE_DIR}/prufgate.sh" "${FILTERED_ARGS[@]}"
+      ;;
+    *)
+      exec python3 "${PRUFGATE_DIR}/prufgate/cli.py" "${FILTERED_ARGS[@]}"
+      ;;
+  esac
+fi
+
+# Containerized execution fallback (or when --docker / --shell is explicitly requested)
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  echo "Error: Neither local PrufGate Python engine nor a running Docker daemon was found." >&2
+  exit 2
+fi
+
+# No image is published yet: never pull a "prufgate" image from a public registry
+# by default (it would be someone else's). Build it locally, or name an image
+# you trust in PRUFGATE_IMAGE.
+SELECTED_IMAGE="${DEFAULT_IMAGE}"
+if ! docker image inspect "${SELECTED_IMAGE}" >/dev/null 2>&1; then
+  if [ -n "${PRUFGATE_IMAGE:-}" ]; then
+    docker pull "${SELECTED_IMAGE}"
+  else
+    echo "Error: image ${SELECTED_IMAGE} not found. Build it with 'prufgate --build' (from a PrufGate checkout) or set PRUFGATE_IMAGE." >&2
+    exit 2
+  fi
+fi
+
+CACHE_DIR="${HOME}/.cache/prufgate"
+mkdir -p "${CACHE_DIR}" "${TARGET_WORKSPACE}/reports"
+
+DOCKER_FLAGS="-i"
+if [ -t 0 ] && [ -t 1 ]; then
+  DOCKER_FLAGS="-it"
+fi
+
+if [ "${1:-}" = "--shell" ]; then
+  shift
+  SHELL_ARGS=()
+  if [ "$#" -gt 0 ]; then
+    SHELL_ARGS=("-c" "$*")
+  fi
+  exec docker run --rm ${DOCKER_FLAGS} \
+    --network host \
+    -e PRUFGATE_UID="$(id -u)" \
+    -e PRUFGATE_GID="$(id -g)" \
+    -v "${TARGET_WORKSPACE}:/workspace" \
+    -v "${CACHE_DIR}:/home/prufgate/.cache" \
+    --entrypoint /bin/bash \
+    "${SELECTED_IMAGE}" "${SHELL_ARGS[@]}"
+fi
+
+exec docker run --rm ${DOCKER_FLAGS} \
+  --network host \
+  -e PRUFGATE_UID="$(id -u)" \
+  -e PRUFGATE_GID="$(id -g)" \
+  -v "${TARGET_WORKSPACE}:/workspace" \
+  -v "${CACHE_DIR}:/home/prufgate/.cache" \
+  "${SELECTED_IMAGE}" "${FILTERED_ARGS[@]}"

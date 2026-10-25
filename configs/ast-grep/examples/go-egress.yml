@@ -1,0 +1,21 @@
+# Example rule, not run by default. Copy it into your project's .prufgate/rules/ to enable it.
+id: go-egress-default-client
+message: "Bare http.DefaultClient, http.Get, or http.Post forbidden. Mandate configured HTTP client with explicit timeout and SSRF protection."
+severity: error
+language: Go
+files:
+  - "**/*.go"
+ignores:
+  - "**/egress/**"
+  - "**/httpclient/**"
+  - "**/client/**"
+  - "**/*_test.go"
+rule:
+  all:
+    - kind: selector_expression
+    - has:
+        field: operand
+        regex: "^http$"
+    - has:
+        field: field
+        regex: "^(DefaultClient|Get|Post|PostForm|Head)$"

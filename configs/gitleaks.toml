@@ -1,0 +1,29 @@
+# PrufGate's gitleaks configuration: the default rules, minus places that hold
+# no source. Used when the target is scanned as a directory (no usable git
+# metadata, e.g. a git worktree mounted into the container), where gitleaks
+# would otherwise read PrufGate's own reports and build output: every previous
+# report re-quotes the secrets it found, and bundlers copy library code (PEM
+# headers, sample tokens) into .next/ and dist/. Those findings are noise that
+# hides a real leak in a tracked file.
+#
+# The legacy [allowlist] table is used deliberately: gitleaks 8.24 (in the
+# image) ignores the newer [[allowlists]] form, and later versions still read
+# this one.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "PrufGate reports, build output and dependencies"
+paths = [
+  '''(^|/)reports/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+  '''(^|/)\.output/''',
+  '''(^|/)\.turbo/''',
+  '''(^|/)dist/''',
+  '''(^|/)build/''',
+  '''(^|/)out/''',
+  '''(^|/)coverage/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)__pycache__/''',
+]

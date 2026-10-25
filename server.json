@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.GuardianVigil-Labs/prufgate",
+  "title": "PrufGate",
+  "description": "Read-only tools that check whether code, and the tests that claim it works, are real.",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/GuardianVigil-Labs/Prufgate",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "prufgate",
+      "version": "1.0.0",
+      "runtimeHint": "uvx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [{ "type": "positional", "value": "mcp" }]
+    }
+  ]
+}

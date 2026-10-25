@@ -1,0 +1,106 @@
+name: 'PrufGate Verification Engine'
+description: 'Universal Anti-Fabrication, Anti-Reward-Hacking, Contract Guard, BOLA & Diff Verification Engine'
+author: 'PrufGate Maintainers'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  battery:
+    description: 'Verification mode: fast (changed files), review/full (entire workspace), bola, test-audit'
+    required: false
+    default: 'fast'
+  target_url:
+    description: 'Optional target URL for active dynamic 2-token BOLA probing'
+    required: false
+    default: ''
+  sarif_upload:
+    description: 'Automatically upload generated SARIF 2.1.0 report to GitHub Code Scanning'
+    required: false
+    default: 'true'
+  fail_on_blocker:
+    description: 'Fail the workflow step when P0/P1 blocker findings are detected'
+    required: false
+    default: 'true'
+  image:
+    description: 'Container image to run when the runner has no python3 (container mode). The default is the signed release image of this version.'
+    required: false
+    default: 'ghcr.io/guardianvigil-labs/prufgate:1.0.0'
+  base_ref:
+    description: 'Git ref that changed files are compared with in fast mode. Defaults to the pull request base branch (origin/<base>). Check out with fetch-depth: 0 so that ref exists.'
+    required: false
+    default: ''
+
+outputs:
+  sarif_path:
+    description: 'Absolute path to the synthesized SARIF 2.1.0 report'
+    value: ${{ steps.run-prufgate.outputs.sarif_path }}
+  markdown_path:
+    description: 'Absolute path to the synthesized Markdown report'
+    value: ${{ steps.run-prufgate.outputs.markdown_path }}
+  verdict:
+    description: 'Overall audit verdict: PASSED or FAILED'
+    value: ${{ steps.run-prufgate.outputs.verdict }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Ensure reports directory
+      shell: bash
+      env:
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+      run: mkdir -p "${GITHUB_WORKSPACE}/reports"
+
+    - name: Run PrufGate Verification
+      id: run-prufgate
+      shell: bash
+      env:
+        PRUFGATE_IMAGE: ${{ inputs.image }}
+        TARGET_URL: ${{ inputs.target_url }}
+        PRUFGATE_BASE_REF: ${{ inputs.base_ref }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        PRUFGATE_BATTERY: ${{ inputs.battery }}
+        FAIL_ON_BLOCKER: ${{ inputs.fail_on_blocker }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set +e
+        if [ -f "${ACTION_PATH}/prufgate.sh" ] && command -v python3 >/dev/null 2>&1; then
+          WORKSPACE="${GITHUB_WORKSPACE}" bash "${ACTION_PATH}/prufgate.sh" "${PRUFGATE_BATTERY}"
+          EXIT_CODE=$?
+        else
+          if [ -z "${PRUFGATE_IMAGE}" ]; then
+            echo "::error::python3 is not available and no image input was given."
+            exit 2
+          fi
+          IMAGE_TO_RUN="${PRUFGATE_IMAGE}"
+          echo "Using PrufGate container image: ${IMAGE_TO_RUN} (mode: ${PRUFGATE_BATTERY})"
+          docker run --rm \
+            --network host \
+            -e PRUFGATE_UID="$(id -u)" \
+            -e PRUFGATE_GID="$(id -g)" \
+            -e TARGET_URL="${TARGET_URL}" \
+            -e PRUFGATE_BASE_REF="${PRUFGATE_BASE_REF}" \
+            -e GITHUB_BASE_REF="${GITHUB_BASE_REF:-}" \
+            -e CI="true" \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            "${IMAGE_TO_RUN}" "${PRUFGATE_BATTERY}"
+          EXIT_CODE=$?
+        fi
+
+        echo "sarif_path=${GITHUB_WORKSPACE}/reports/prufgate.sarif" >> "${GITHUB_OUTPUT}"
+        echo "markdown_path=${GITHUB_WORKSPACE}/reports/prufgate-review.md" >> "${GITHUB_OUTPUT}"
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo "verdict=PASSED" >> "${GITHUB_OUTPUT}"
+        else
+          echo "verdict=FAILED" >> "${GITHUB_OUTPUT}"
+          if [ "${FAIL_ON_BLOCKER}" = "true" ]; then
+            exit $EXIT_CODE
+          fi
+        fi
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: always() && inputs.sarif_upload == 'true' && hashFiles('reports/prufgate.sarif') != ''
+      uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      with:
+        sarif_file: ${{ github.workspace }}/reports/prufgate.sarif
+        category: 'prufgate'

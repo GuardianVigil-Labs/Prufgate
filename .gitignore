@@ -1,0 +1,24 @@
+# PrufGate gitignore
+reports/
+.cache/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
+.env.local
+.DS_Store
+*.log
+*.fail
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local IDE & AI agent workspace files (never commit)
+.claude/
+.cursor/
+.agents/
+*.local.json
+*.mdc

@@ -1,0 +1,39 @@
+version: 2
+
+# Monthly and capped. Security updates are raised as advisories land,
+# whatever the schedule. Verify a bump with the self-checks and ./prufgate.sh fast
+# before merging it: every repository using PrufGate runs this scanner.
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    groups: { python: { patterns: ["*"] } }
+    # Major versions are a planned change, not a monthly chore: they arrive
+    # here only as security updates, which ignore this rule.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # The hash-pinned tools the release workflow installs.
+  - package-ecosystem: pip
+    directory: "/.github"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    groups: { release-tools: { patterns: ["*"] } }
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    # Major versions are a planned change, not a monthly chore: they arrive
+    # here only as security updates, which ignore this rule.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    groups: { actions: { patterns: ["*"] } }
