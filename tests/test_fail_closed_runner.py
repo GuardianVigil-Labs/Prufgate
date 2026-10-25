@@ -23,6 +23,10 @@ from prufgate import cli  # noqa: E402
 from prufgate.config import ConfigError, PrufGateConfig, path_matches_pattern  # noqa: E402
 from prufgate.hooks.agent_hooks import HOOK_COMMAND, HookConfigError, init_workspace  # noqa: E402
 
+# Hermetic: CI exports these on pull requests; a test that needs a base ref sets it.
+for _ci_var in ("GITHUB_BASE_REF", "PRUFGATE_BASE_REF"):
+    os.environ.pop(_ci_var, None)
+
 
 def synth_core() -> set[str]:
     from prufgate.synthesizer.parse_results import CORE_ENGINES
