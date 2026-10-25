@@ -13,6 +13,7 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 
 ### Security
 - The container's base images are pinned by digest, and every `pip install` in the image and the workflows uses hash-locked requirements.
+- The container and fuzz builds use setuptools 84.2.1 (CVE-2026-59890, GHSA-xmj3-9gf7-h52w), and install PrufGate from a locally built wheel.
 
 ## [1.0.0]
 
