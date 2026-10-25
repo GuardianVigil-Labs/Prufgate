@@ -5,10 +5,10 @@ and Multi-Language Anti-Fabrication Engine (`prufgate/anti_fabrication/detector.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
-import os
 import time
 import unittest
 from pathlib import Path
