@@ -5,7 +5,7 @@
   <p><strong>Checks whether code, and the tests that claim it works, are real.</strong></p>
   <p>
     <a href="https://github.com/GuardianVigil-Labs/Prufgate/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-green.svg" alt="License: Apache 2.0" /></a>
-    <a href="https://pypi.org/project/prufgate/"><img src="https://img.shields.io/pypi/v/prufgate" alt="PyPI version" /></a>
+    <a href="https://pypi.org/project/prufgate/"><img src="https://img.shields.io/pypi/v/prufgate?label=pypi" alt="PyPI version" /></a>
     <img src="https://img.shields.io/badge/Python-3.9%2B-blue" alt="Python 3.9+" />
     <a href="https://scorecard.dev/viewer/?uri=github.com/GuardianVigil-Labs/Prufgate"><img src="https://api.scorecard.dev/projects/github.com/GuardianVigil-Labs/Prufgate/badge" alt="OpenSSF Scorecard" /></a>
   </p>
