@@ -200,6 +200,16 @@ exempt:
         self.assertEqual(detector.classify_file("a.rb"), "ruby")
         self.assertEqual(detector.classify_file("a.cs"), "csharp")
 
+    def test_non_string_top_level_keys_are_a_config_error(self):
+        # Found by fuzz/fuzz_config.py: "?" is a YAML mapping with a null key.
+        for text in ("?\n", "1: true\n", "~: x\nversion: 1\n"):
+            with self.subTest(text=text):
+                path = self.repo / ".prufgate" / "config.yaml"
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+                with self.assertRaises(ConfigError):
+                    PrufGateConfig.load(self.repo)
+
     def test_performance_benchmark_1000_files_under_500ms(self):
         perf_dir = self.repo / "src" / "perf"
         perf_dir.mkdir(parents=True)

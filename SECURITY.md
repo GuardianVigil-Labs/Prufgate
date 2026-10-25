@@ -54,6 +54,8 @@ Every release is built by `.github/workflows/release.yml` from a `v*` tag, with 
 gh release download v1.0.0 --repo GuardianVigil-Labs/Prufgate
 sha256sum -c SHA256SUMS
 gh attestation verify prufgate-1.0.0-py3-none-any.whl --repo GuardianVigil-Labs/Prufgate
+# Or offline, with the attestations attached to the release:
+gh attestation verify prufgate-1.0.0-py3-none-any.whl --repo GuardianVigil-Labs/Prufgate --bundle prufgate-1.0.0-py3-none-any.whl.intoto.jsonl
 pip install ./prufgate-1.0.0-py3-none-any.whl
 ```
 

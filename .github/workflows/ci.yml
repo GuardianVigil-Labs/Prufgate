@@ -35,7 +35,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Self-check and unit tests
         run: |
-          python3 -m pip install "PyYAML>=6.0"
+          python3 -m pip install --require-hashes -r .github/ci-requirements.txt
           python3 prufgate/cli.py --self-check
           python3 -m unittest discover -s tests
 
@@ -60,7 +60,7 @@ jobs:
 
       - name: Install PyYAML & Ruff
         run: |
-          python3 -m pip install --upgrade pip "PyYAML>=6.0" "ruff==0.17.2"
+          python3 -m pip install --require-hashes -r .github/ci-requirements.txt
 
       - name: Verify All 6 Core Engines Self-Check
         run: |
