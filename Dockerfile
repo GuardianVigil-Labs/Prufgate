@@ -4,7 +4,7 @@
 # ==============================================================================
 # Stage 1: Static Binary Extractor (ast-grep, gitleaks, zizmor)
 # ==============================================================================
-FROM debian:bookworm-slim AS binary-extractor
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS binary-extractor
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -51,7 +51,7 @@ RUN ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" && \
 # ==============================================================================
 # Stage 2: runtime
 # ==============================================================================
-FROM python:3.14-slim-bookworm AS core
+FROM python:3.14-slim-bookworm@sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae AS core
 
 # tests/test_workflows.py keeps the version equal to prufgate.__version__.
 LABEL org.opencontainers.image.title="PrufGate" \
@@ -90,8 +90,11 @@ RUN groupadd -g 1000 prufgategroup 2>/dev/null || true && \
     chmod -R 1775 /home/prufgate /workspace
 
 COPY . /tools/prufgate/
-# The `prufgate` and `prufgate-mcp` commands (and PyYAML), from this checkout.
-RUN python3 -m pip install --no-cache-dir /tools/prufgate && \
+# The `prufgate` and `prufgate-mcp` commands, from this checkout. PyYAML and the
+# build backend come from the hash-locked requirements.txt, so nothing unpinned
+# is downloaded.
+RUN python3 -m pip install --no-cache-dir --require-hashes -r /tools/prufgate/requirements.txt && \
+    python3 -m pip install --no-cache-dir --no-deps --no-build-isolation /tools/prufgate && \
     rm -rf /tools/prufgate/build /tools/prufgate/*.egg-info && \
     chmod +x /tools/prufgate/prufgate.sh /tools/prufgate/entrypoint.sh /tools/prufgate/bin/prufgate /tools/prufgate/runners/*.sh
 

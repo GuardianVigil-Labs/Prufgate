@@ -55,6 +55,11 @@ Changelog = "https://github.com/GuardianVigil-Labs/Prufgate/blob/main/CHANGELOG.
 prufgate = "prufgate.cli:main"
 prufgate-mcp = "prufgate.mcp.prufgate_mcp_server:main"
 
+# Not installed with the package: the fuzz targets in fuzz/ run in the
+# ClusterFuzzLite image, which ships atheris.
+[dependency-groups]
+fuzz = ["atheris"]
+
 [tool.setuptools.packages.find]
 include = ["prufgate*"]
 

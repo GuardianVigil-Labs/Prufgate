@@ -317,6 +317,8 @@ class PrufGateConfig:
         raw = cls._read_raw_file(p)
         if not isinstance(raw, dict):
             raise ConfigError(f"{p}: expected a top-level mapping/object")
+        if not all(isinstance(k, str) for k in raw):
+            raise ConfigError(f"{p}: top-level keys must be strings")
 
         # Handle legacy debt-ceiling.json files that may contain arbitrary rule-count keys
         if p.name == "debt-ceiling.json" and not (set(raw) & CONFIG_KEYS):

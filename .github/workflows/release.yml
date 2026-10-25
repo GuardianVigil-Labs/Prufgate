@@ -45,7 +45,7 @@ jobs:
         run: test "v$(python3 -c 'import prufgate; print(prufgate.__version__)')" = "${TAG}"
       - name: Self-check, unit tests and the leak guard
         run: |
-          python3 -m pip install "PyYAML>=6.0"
+          python3 -m pip install --require-hashes -r .github/ci-requirements.txt
           python3 prufgate/cli.py --self-check
           python3 -m unittest discover -s tests
 
@@ -224,6 +224,8 @@ jobs:
           \`\`\`sh
           sha256sum -c SHA256SUMS
           gh attestation verify prufgate-${version}-py3-none-any.whl --repo ${GITHUB_REPOSITORY}
+          gh attestation verify prufgate-${version}-py3-none-any.whl --repo ${GITHUB_REPOSITORY} \\
+            --bundle prufgate-${version}-py3-none-any.whl.intoto.jsonl   # offline
           cosign verify ghcr.io/guardianvigil-labs/prufgate:${version} \\
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${TAG}" \\
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -232,6 +234,17 @@ jobs:
 
           Details: "Verify a release" in SECURITY.md.
           EOF
+      - name: Provenance files for the release
+        # Each <file>.intoto.jsonl holds that file's signed attestations, so a
+        # release can be verified offline: gh attestation verify <file> --bundle <file>.intoto.jsonl
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in dist/*.whl dist/*.tar.gz; do
+            gh attestation download "${f}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+            mv "sha256:$(sha256sum "${f}" | cut -d' ' -f1).jsonl" "${f}.intoto.jsonl"
+            gh attestation verify "${f}" --bundle "${f}.intoto.jsonl" --repo "${GITHUB_REPOSITORY}"
+          done
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

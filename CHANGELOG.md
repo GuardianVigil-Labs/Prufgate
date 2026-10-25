@@ -4,6 +4,16 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Added
+- Fuzz targets for the config loader, the diff parsers and the source and test scanners (`fuzz/`), run by ClusterFuzzLite on pull requests.
+- Each release attaches `<file>.intoto.jsonl` with the wheel's and sdist's signed attestations, for offline verification.
+
+### Fixed
+- A `.prufgate/config.yaml` with a non-string top-level key (for example a bare `?`) crashed with a `TypeError` instead of a configuration error. Found by fuzzing.
+
+### Security
+- The container's base images are pinned by digest, and every `pip install` in the image and the workflows uses hash-locked requirements.
+
 ## [1.0.0]
 
 The first public release: six verification engines (anti-fabrication, test integrity, diff guard, contract guard, BOLA/IDOR and diff review), the `prufgate` CLI, a GitHub Action, an MCP server, coding-agent hooks and a container image. The Changed, Fixed and Security entries are against the pre-release development versions.
