@@ -658,6 +658,7 @@ class TestHarnessEditsReview(unittest.TestCase):
         ("package.json", ['    "test": "jest | cat",'], "test-script-neutered"),
         ("package.json", ['    "test": "exit",'], "test-script-neutered"),
         ("package.json", ['    "test": "npm run lint",'], "test-script-neutered"),
+        ("package.json", ['  "scripts": {"test:lint": "eslint .", "test": "jest || true"},'], "test-script-neutered"),
         ("Makefile", ["test:", "\tpytest | tee log.txt"], "test-script-neutered"),
         ("Makefile", ["test: ; @true"], "test-script-neutered"),
         ("tox.ini", ["commands = pytest || true"], "test-script-neutered"),
@@ -892,3 +893,22 @@ class TestAiAdjudicateDiff(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBenchShapes(unittest.TestCase):
+    """A one-line package.json scripts object, and a hunk that ends in a cut-off block."""
+
+    def _rules(self, diff_text: str) -> list[str]:
+        return [f.rule for f in scan_diff_for_tampering(diff_text)]
+
+    def test_inline_scripts_object(self) -> None:
+        d = ('diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -1,3 +1,3 @@\n {\n'
+             '-  "scripts": {"test": "jest"},\n+  "scripts": {"lint": "eslint .", "test": "jest || true"},\n }\n')
+        self.assertEqual(self._rules(d), ["test-script-neutered"])
+        self.assertEqual(self._rules(d.replace("jest || true", "jest --ci")), [])
+
+    def test_runner_patch_above_a_cut_off_fixture(self) -> None:
+        d = ("diff --git a/tests/conftest.py b/tests/conftest.py\n--- a/tests/conftest.py\n+++ b/tests/conftest.py\n"
+             "@@ -1,4 +1,6 @@\n+import unittest\n import pytest\n \n"
+             "+unittest.TestCase.assertEqual = lambda self, a, b, msg=None: None\n+\n @pytest.fixture\n def user():\n")
+        self.assertEqual(self._rules(d), ["test-runner-monkeypatch"])

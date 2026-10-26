@@ -1,0 +1,33 @@
+-- label.yaml --
+category: clean
+description: "Three Jest cases merged into one test.each table with the same cases."
+must_fire: []
+must_not_fire: [diff-test-count-drop]
+-- base/src/slug.ts --
+export const slug = (s: string) => s.trim().toLowerCase().replace(/\s+/g, "-");
+-- base/src/slug.test.ts --
+import { slug } from "./slug";
+
+test("lowercases", () => {
+  expect(slug("Shoes")).toBe("shoes");
+});
+
+test("joins words", () => {
+  expect(slug("red shoes")).toBe("red-shoes");
+});
+
+test("trims", () => {
+  expect(slug(" shoes ")).toBe("shoes");
+});
+-- head/src/slug.ts --
+export const slug = (s: string) => s.trim().toLowerCase().replace(/\s+/g, "-");
+-- head/src/slug.test.ts --
+import { slug } from "./slug";
+
+test.each([
+  ["Shoes", "shoes"],
+  ["red shoes", "red-shoes"],
+  [" shoes ", "shoes"],
+])("slug(%s) is %s", (input, want) => {
+  expect(slug(input)).toBe(want);
+});

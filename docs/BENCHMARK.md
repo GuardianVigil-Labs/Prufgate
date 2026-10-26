@@ -13,7 +13,7 @@ prufgate bench                                  # text report for bench/cases
 prufgate bench --format markdown                # tables for a pull request
 prufgate bench --format json                    # machine-readable
 prufgate bench --rule test-skip-smuggling       # score one rule
-prufgate bench --min-precision 0.96 --min-recall 0.83   # exit 1 below either floor
+prufgate bench --min-precision 1.0 --min-recall 1.0     # exit 1 below either floor
 ```
 
 `--cases DIR` points at another corpus. Exit codes: 0 a report, 1 below a `--min-precision` / `--min-recall` floor, 2 a malformed case or an engine error (never a score).
@@ -44,70 +44,62 @@ Labels state what *should* happen. When the engines disagree with a label, the m
 
 ## Current results
 
-Measured on this commit's corpus (90 cases), `prufgate bench`:
+Measured on this commit's corpus (103 cases), `prufgate bench`:
 
 ```text
-90 cases; precision 0.961, recall 0.831 (TP 49, FP 2, FN 10)
+103 cases; precision 1.000, recall 1.000 (TP 66, FP 0, FN 0)
 
   always-current-fake-timestamp              TP   1  FP   0  FN   0  P 1.000  R 1.000
   always-true-equality                       TP   1  FP   0  FN   0  P 1.000  R 1.000
-  canned-error-fallback                      TP   2  FP   0  FN   3  P 1.000  R 0.400
+  canned-error-fallback                      TP   5  FP   0  FN   0  P 1.000  R 1.000
   caught-and-ignored-test-exception          TP   1  FP   0  FN   0  P 1.000  R 1.000
   coverage-threshold-lowering                TP   1  FP   0  FN   0  P 1.000  R 1.000
   diff-assertion-weakening                   TP   2  FP   0  FN   0  P 1.000  R 1.000
-  diff-test-count-drop                       TP   2  FP   1  FN   0  P 0.667  R 1.000
-  diff-test-file-deleted                     TP   1  FP   1  FN   0  P 0.500  R 1.000
+  diff-test-count-drop                       TP   3  FP   0  FN   0  P 1.000  R 1.000
+  diff-test-file-deleted                     TP   7  FP   0  FN   0  P 1.000  R 1.000
   disconnected-form-submit                   TP   2  FP   0  FN   0  P 1.000  R 1.000
   documentation-ip-or-domain                 TP   1  FP   0  FN   0  P 1.000  R 1.000
   frontend-backend-route-mismatch            TP   1  FP   0  FN   0  P 1.000  R 1.000
   linter-or-ci-config-weakening              TP   2  FP   0  FN   0  P 1.000  R 1.000
-  prompt-invents-finding                     TP   0  FP   0  FN   1  P n/a  R 0.000
+  prompt-invents-finding                     TP   1  FP   0  FN   0  P 1.000  R 1.000
   prufgate-config-not-applied                TP   1  FP   0  FN   0  P 1.000  R 1.000
   prufgate-config-self-exemption             TP   1  FP   0  FN   0  P 1.000  R 1.000
   pytest-collection-deselect                 TP   1  FP   0  FN   0  P 1.000  R 1.000
   pytest-result-rewrite                      TP   1  FP   0  FN   0  P 1.000  R 1.000
-  self-mocked-unit-under-test                TP   0  FP   0  FN   1  P n/a  R 0.000
-  simulated-return-value                     TP   0  FP   0  FN   1  P n/a  R 0.000
-  snapshot-blind-update-or-empty             TP   0  FP   0  FN   1  P n/a  R 0.000
+  self-mocked-unit-under-test                TP   1  FP   0  FN   0  P 1.000  R 1.000
+  simulated-return-value                     TP   1  FP   0  FN   0  P 1.000  R 1.000
+  snapshot-blind-update-or-empty             TP   1  FP   0  FN   0  P 1.000  R 1.000
   static-bola-unscoped-access                TP   3  FP   0  FN   0  P 1.000  R 1.000
   suppression-comment-smuggling              TP   3  FP   0  FN   0  P 1.000  R 1.000
-  synthetic-delay-mock                       TP   1  FP   0  FN   1  P 1.000  R 0.500
+  synthetic-delay-mock                       TP   2  FP   0  FN   0  P 1.000  R 1.000
   tautological-assertion                     TP   2  FP   0  FN   0  P 1.000  R 1.000
   test-config-weakening                      TP   1  FP   0  FN   0  P 1.000  R 1.000
   test-fake-exit                             TP   3  FP   0  FN   0  P 1.000  R 1.000
   test-input-special-casing                  TP   1  FP   0  FN   0  P 1.000  R 1.000
-  test-runner-monkeypatch                    TP   0  FP   0  FN   1  P n/a  R 0.000
-  test-script-neutered                       TP   0  FP   0  FN   1  P n/a  R 0.000
+  test-runner-monkeypatch                    TP   1  FP   0  FN   0  P 1.000  R 1.000
+  test-script-neutered                       TP   1  FP   0  FN   0  P 1.000  R 1.000
   test-skip-smuggling                        TP   3  FP   0  FN   0  P 1.000  R 1.000
   undeclared-or-hallucinated-import          TP   2  FP   0  FN   0  P 1.000  R 1.000
   undocumented-env-var-drift                 TP   1  FP   0  FN   0  P 1.000  R 1.000
   unimplemented-production-stub              TP   3  FP   0  FN   0  P 1.000  R 1.000
   unsafe-type-cast-cascade                   TP   1  FP   0  FN   0  P 1.000  R 1.000
   zero-assertion-test                        TP   4  FP   0  FN   0  P 1.000  R 1.000
-
-Misses:
-  false-negative  test-script-neutered                       cfg-npm-test-or-true
-  false-positive  diff-test-file-deleted                     clean-py-feature-removed-with-test
-  false-positive  diff-test-count-drop                       clean-py-parametrize-merge
-  false-negative  canned-error-fallback                      fab-go-canned-error-fallback
-  false-negative  canned-error-fallback                      fab-py-canned-error-fallback
-  false-negative  canned-error-fallback                      fab-py-empty-except
-  false-negative  prompt-invents-finding                     fab-py-prompt-invents-finding
-  false-negative  simulated-return-value                     fab-py-simulated-return
-  false-negative  synthetic-delay-mock                       fab-py-synthetic-delay
-  false-negative  test-runner-monkeypatch                    harness-py-assert-monkeypatch
-  false-negative  self-mocked-unit-under-test                hollow-py-self-mock
-  false-negative  snapshot-blind-update-or-empty             hollow-ts-empty-snapshot
 ```
 
-Corpus by category: 33 clean, 16 fabrication, 8 hollow test, 6 configuration weakening, 4 harness edit, 4 suppression, 4 contract, 3 BOLA, 3 deleted test, 3 fake exit, 3 skipped test, 3 weakened test. By language (cases touching at least one such file): Python 42, TypeScript/TSX 25, Go 11, JavaScript 1, plus configuration files (JSON, TOML, INI).
+Corpus by category: 39 clean, 16 fabrication, 10 deleted test, 8 hollow test, 6 configuration weakening, 4 harness edit, 4 suppression, 4 contract, 3 BOLA, 3 fake exit, 3 skipped test, 3 weakened test. By language (cases touching at least one such file): Python 49, TypeScript/TSX 28, Go 14, JavaScript 1, plus configuration files (JSON, TOML, INI).
 
-What the misses say:
+No misses on this corpus. That says the corpus is small and written by the people who wrote the engines, not that PrufGate catches everything; send the cases it gets wrong.
 
-- **False positives (2, both test-removal rules).** Merging three copy-pasted tests into one `@pytest.mark.parametrize` test lowers the count of `def test_*` functions, and `diff-test-count-drop` fires. Retiring a feature together with its test file triggers `diff-test-file-deleted`. Both are by design conservative (a removed test is asked to explain itself), and both are the first things to fix.
-- **False negatives (10).** Shapes the engines do not recognise yet: a Python `except` or Go `if err != nil` returning a hard-coded success, a bare `except: pass`, a Python `time.sleep` before a fixed result, a literal under a "simulated" comment, an LLM prompt asking for a `risk_score`, `unittest.TestCase.assertEqual` replaced by assignment in `conftest.py`, a `package.json` test script changed to `jest || true`, `patch("module.func")` of the function under test, and an empty `toMatchInlineSnapshot()`.
+What the last round of fixes changed (the previous measurement was precision 0.961, recall 0.831 on 90 cases):
 
-The unit test `tests/test_bench.py` runs the corpus with `--min-precision 0.96 --min-recall 0.83`: a change that lowers either fails the build. Raise the floors when the numbers improve.
+- **Parametrised tests count per case.** `diff-test-count-drop` counts `@pytest.mark.parametrize` with a literal list (stacked decorators multiply), `it.each([...])` / `test.each([...])` with an array, and a Go test that runs a literal `[]struct{...}` or map table with `t.Run`, once per case. Merging copy-pasted tests into one parametrised test with as many cases is no drop; cutting cases from a parametrised test whose `def` line is unchanged is one. Copies of one case count once, and cases whose parameters the test body never uses count as one. A modified test file still in the working tree is counted whole on both sides, so cases cut far from the test's definition line count too. A case list held in a variable counts as one case.
+- **A test retired with its feature is not reported.** When a deleted test file's first-party imports are all deleted by the same diff (Python `import` / `from ... import`, relative JavaScript or TypeScript imports, or for Go every non-test file of its package), `diff-test-file-deleted` stays silent and its tests do not count as a drop. Deleting the feature is the decision under review, not a hidden failure. A test is still reported when any module it imports stays (deleting a helper, a fixtures file, a package `__init__.py` or a Go `doc.go` beside it is not enough), or when a name the deleted module defined and the test uses is defined again in an added line elsewhere (the feature moved, it was not retired).
+- **Error paths answering with a hard-coded success.** `canned-error-fallback` covers a Python or JavaScript handler returning a decision field set to true (`approved`, `valid`, `verified`, `authorized`, `allowed`, `passed`) and a Go `if err != nil { return true, nil }`. A Python handler now ends at its dedent, so code after it is not read as part of it.
+- **`except: pass`.** `unhandled-empty-catch` covers a Python `except:`, `except Exception:` or `except BaseException:` whose body is only `pass` or `...`. A narrow `except FileNotFoundError: pass` is not reported.
+- **Other shapes:** a one-line dict with a literal number or boolean under a "simulated" comment (`simulated-return-value`), a sleep before `{"status": "complete"}` (`synthetic-delay-mock`), a judgement asked for in prose inside a prompt string (`"Give a risk_score from 0 to 100"`, `prompt-invents-finding`), `with patch("pkg.mod.func")` of the function under test (`self-mocked-unit-under-test`), an unfilled `toMatchInlineSnapshot()` (`snapshot-blind-update-or-empty`), and a `"test"` script inside a one-line `"scripts": {...}` object (`test-script-neutered`).
+- **Hunks cut off by the diff context.** A Python hunk whose trailing context opens a block with no body (`@pytest.fixture` / `def user():`) now parses with those context lines dropped, so `test-runner-monkeypatch` sees a `unittest.TestCase.assertEqual = ...` above it. Added lines are never dropped.
+
+The unit test `tests/test_bench.py` runs the corpus with `--min-precision 1.0 --min-recall 1.0`: a change that lowers either fails the build. A new case PrufGate gets wrong lowers them; lower the floor to the new measurement in the same pull request and say why.
 
 ## Adding a case
 

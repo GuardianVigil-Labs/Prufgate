@@ -138,7 +138,23 @@ def _redact(text: str) -> str:
     for name, value in os.environ.items():
         if len(value) >= 8 and any(h in name.upper() for h in _SECRET_ENV_HINTS):
             text = text.replace(value, "[redacted]")
-    return re.sub(r"(?i)(bearer\s+|x-api-key['\"]?\s*[:=]\s*['\"]?)[^\s'\",}]+", r"\1[redacted]", text)
+    for pat, keep in _SECRET_SHAPES:
+        text = pat.sub(keep + "[redacted]", text)
+    return text
+
+
+# (pattern, replacement prefix): the value after the kept groups is removed.
+_SECRET_SHAPES = (
+    (re.compile(r"(?i)(bearer\s+|x-api-key['\"]?\s*[:=]\s*['\"]?)[^\s'\",}]+"), r"\1"),
+    # `PGPASSWORD=x cmd`, `DB_PASS=x`: an unquoted value of an upper-case secret-named variable.
+    (re.compile(r"\b([A-Z0-9_]*(?:PASS|PWD|TOKEN|SECRET|KEY|AUTH|COOKIE|CREDENTIAL)[A-Z0-9_]*=)(?![\"'$\[])[^\s;&|()<>]+"), r"\1"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]+:)[^/\s@]+(?=@)"), r"\1"),  # URL userinfo
+    (re.compile(r"(?<!\S)(-u\s*|--user[=\s]\s*)([^\s:]+:)(?!\[redacted\])\S+"), r"\1\2"),  # curl -u user:pass
+    (re.compile(r"(?i)(?<!\S)(--(?:passw(?:or)?d|token|api-key|secret)(?:=|\s+))(?!\[redacted\])\S+"), r"\1"),
+    (re.compile(r"(\blogin\b[^\n;&|]*?\s-p\s+)\S+"), r"\1"),  # docker login -p x
+    (re.compile(r"(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n;&|]*?\s-p)(?=[^\s\[])\S+"), r"\1"),  # mysql -px
+    (re.compile(r"(?i)\b((?:proxy-)?authorization|(?:set-)?cookie)(\s*:\s*)[^\n'\"]+"), r"\1\2"),
+)
 
 
 def _private_tmp_parent() -> str | None:

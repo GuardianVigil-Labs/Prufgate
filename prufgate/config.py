@@ -65,12 +65,14 @@ CONFIG_KEYS = {
     "model_call_patterns",
     "evidence_markers",
     "registry_check",
+    "ghost_symbols",
     "enable_low_confidence",
     "bola",
     "ai_adjudicate",
 }
 BOLA_KEYS = {"global_tables"}
 REGISTRY_CHECK_KEYS = {"offline_ok", "max_age_days", "max_lookups"}
+GHOST_SYMBOLS_KEYS = {"third_party"}
 # `ai_adjudicate` integer settings: (default, minimum, maximum).
 AI_ADJUDICATE_LIMITS = {
     "max_findings": (20, 0, 500),
@@ -261,6 +263,21 @@ def _parse_registry_check(raw: Any) -> tuple[bool, bool, int, int]:
     return True, offline_ok, numbers[0], numbers[1]
 
 
+def _parse_ghost_symbols(raw: Any) -> bool:
+    """`ghost_symbols: {third_party: true}`: also check names imported from installed packages."""
+    if raw is None:
+        return False
+    if not isinstance(raw, dict):
+        raise ConfigError("ghost_symbols must be a mapping")
+    unknown = set(raw) - GHOST_SYMBOLS_KEYS
+    if unknown:
+        raise ConfigError(f"ghost_symbols: unknown key(s): {', '.join(sorted(map(str, unknown)))}")
+    third_party = raw.get("third_party", False)
+    if not isinstance(third_party, bool):
+        raise ConfigError("ghost_symbols.third_party must be true or false")
+    return third_party
+
+
 def _parse_bola(raw: Any) -> list[str]:
     """`bola`: a mapping; `global_tables` lists tables shared by every tenant (countries,
     currencies) that BOLA-TABLE-MISSING-TENANT-COLUMN must not flag."""
@@ -418,6 +435,7 @@ class PrufGateConfig:
     registry_offline_ok: bool = False
     registry_max_age_days: int = 30
     registry_max_lookups: int = 50
+    ghost_third_party: bool = False
     enable_low_confidence: bool = False
     bola_global_tables: list[str] = field(default_factory=list)
     ai_adjudicate: AiAdjudicate = field(default_factory=AiAdjudicate)
@@ -590,6 +608,7 @@ class PrufGateConfig:
             raw.get("registry_check")
         )
         known_debt, known_debt_ceilings = _parse_known_debt(raw.get("known_debt"))
+        ghost_third_party = _parse_ghost_symbols(raw.get("ghost_symbols"))
 
         for key in known_debt:
             for ex_path, ex_rule in exempt:
@@ -620,6 +639,7 @@ class PrufGateConfig:
             registry_offline_ok=registry_offline_ok,
             registry_max_age_days=registry_max_age_days,
             registry_max_lookups=registry_max_lookups,
+            ghost_third_party=ghost_third_party,
             enable_low_confidence=enable_low_confidence,
             bola_global_tables=bola_global_tables,
             ai_adjudicate=ai_adjudicate,

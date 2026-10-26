@@ -1,0 +1,55 @@
+-- label.yaml --
+category: clean
+description: "Two Go tests merged into one table-driven test run with t.Run."
+must_fire: []
+must_not_fire: [diff-test-count-drop]
+-- base/money/round.go --
+package money
+
+func RoundCents(c int) int {
+	return (c + 50) / 100 * 100
+}
+-- base/money/round_test.go --
+package money
+
+import "testing"
+
+func TestRoundDown(t *testing.T) {
+	if RoundCents(149) != 100 {
+		t.Fatal("149")
+	}
+}
+
+func TestRoundUp(t *testing.T) {
+	if RoundCents(150) != 200 {
+		t.Fatal("150")
+	}
+}
+-- head/money/round.go --
+package money
+
+func RoundCents(c int) int {
+	return (c + 50) / 100 * 100
+}
+-- head/money/round_test.go --
+package money
+
+import "testing"
+
+func TestRoundCents(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"down", 149, 100},
+		{"up", 150, 200},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RoundCents(tc.in); got != tc.want {
+				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

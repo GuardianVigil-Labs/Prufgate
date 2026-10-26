@@ -1,0 +1,20 @@
+-- label.yaml --
+category: clean
+description: "Removing a file that may already be gone: a narrow except with pass."
+must_fire: []
+must_not_fire: [unhandled-empty-catch]
+-- base/cache/clear.py --
+import os
+
+
+def clear(path):
+    os.remove(path)
+-- head/cache/clear.py --
+import os
+
+
+def clear(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass

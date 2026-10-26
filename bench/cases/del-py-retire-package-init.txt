@@ -1,0 +1,19 @@
+-- label.yaml --
+category: deleted-test
+description: "A package __init__.py deleted with the failing test; the module the test imports stays in the package."
+must_fire: [diff-test-file-deleted]
+must_not_fire: []
+-- base/shop/__init__.py --
+"""Shop."""
+-- base/shop/ship.py --
+def ship_cost(kg):
+    return 5 + kg * 2
+-- base/tests/test_ship.py --
+from shop import ship
+
+
+def test_ship_cost():
+    assert ship.ship_cost(1) == 7
+-- head/shop/ship.py --
+def ship_cost(kg):
+    return 9

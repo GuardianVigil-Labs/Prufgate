@@ -83,6 +83,25 @@ prufgate:
 - **JUnit**: one test suite per rule and one test case per finding, named `path:line` with a `file` attribute, so every row in a test tab points at code. P0/P1 findings are failures; P2/P3 are skipped, so they show without failing the test run. A clean run holds one passing test case, because a report without test cases is an error in Jenkins and Azure. When an engine of the gate crashed, each one is an `<error>` test case, and the Code Quality report has a `blocker` issue `prufgate-engine-error` for it: a gate that could not run never reads as a clean report.
 - **Jenkins**: archive the file with the JUnit plugin, `junit testResults: 'reports/prufgate-junit.xml'`. **Azure Pipelines**: `PublishTestResults@2` with `testResultsFormat: JUnit` and `testResultsFiles: reports/prufgate-junit.xml`, and `condition: always()` so a failed gate still publishes.
 
+## Semgrep and Opengrep: exported rules
+
+If your pipeline already runs [Semgrep](https://semgrep.dev) or [Opengrep](https://github.com/opengrep/opengrep), you can run PrufGate's single-line pattern rules there too:
+
+```sh
+prufgate export-rules --format semgrep --out prufgate-rules.yaml           # default packs
+prufgate export-rules --format semgrep --pack cti --out prufgate-rules.yaml  # plus the opt-in cti pack
+semgrep scan --config prufgate-rules.yaml      # or: opengrep scan --config prufgate-rules.yaml
+```
+
+Without `--out` the YAML goes to standard output. The output is sorted and carries no timestamp, so you can commit it and review the diff when you upgrade PrufGate.
+
+- **What is exported:** the Engine 1 rules that are one regular expression over one line (`documentation-address`, `always-current-fake`, `invented-event-timestamp`, `stub-click-handler`; with `--pack cti` also `hardcoded-cve`, `hardcoded-attribution`, `llm-generated-intel`, `substring-decides-verdict`, `zero-jarm-as-fingerprint`, `empty-input-digest-as-sample`). Each is a `pattern-regex` rule (`languages: [regex]`) with `pattern-not-regex` for comment lines, and `paths` that keep PrufGate's file types and its default skips (tests, fixtures, build output).
+- **What is not:** rules that need a context window (error paths, catch blocks), the diff (Engines 2, 3 and 6), cross-file analysis (Engines 4 and 5), the project's configuration, or low-confidence rules, which are off by default. The comment header of the file lists every rule left out, with the reason. The built-in ast-grep rule `action-authorization-guard` is left out too: Semgrep's `pattern-not` cannot carry its regex on the callee.
+- **IDs and metadata:** rule IDs are `prufgate.<rule>`; `metadata` holds `prufgate-rule-id`, `confidence`, `pack`, `source` (the rule's section of [ENGINES.md](ENGINES.md#engine-1-anti-fabrication)) and `license: Apache-2.0`. Severity maps P0 and P1 to `ERROR`, P2 to `WARNING` and P3 to `INFO`; every exported rule is P0 in PrufGate.
+- **Regex flavour:** the patterns are PrufGate's own Python regexes, with their flags written inline (`(?i)`, `(?x)`). Semgrep and Opengrep use PCRE2 over the whole file, which differs from PrufGate in three ways: `\w` and `\b` are ASCII-only in PCRE2 and Unicode-aware in Python; a `\s` can match across a line break there, while PrufGate matches one line at a time; and PrufGate's skip of lines inside multi-line Python strings has no equivalent. `tests/test_export_rules.py` checks that every pattern compiles with Python `re`, that each rule flags its positive fixture and passes its near miss, that the detector agrees on both, and runs `semgrep --validate` when Semgrep or Opengrep is installed.
+
+`prufgate check` remains the full gate; the export is for teams that want these checks inside the scanner they already run.
+
 ## pre-commit
 
 This repository is a [pre-commit](https://pre-commit.com) hook repository (pre-commit 3.2 or newer). In your project's `.pre-commit-config.yaml`:

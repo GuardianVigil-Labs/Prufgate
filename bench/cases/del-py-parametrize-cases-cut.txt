@@ -1,0 +1,35 @@
+-- label.yaml --
+category: deleted-test
+description: "Failing cases cut from a parametrised test whose definition line is unchanged."
+must_fire: [diff-test-count-drop]
+must_not_fire: []
+-- base/shop/parse.py --
+def parse_qty(s):
+    return int(s)
+-- base/tests/test_parse.py --
+import pytest
+
+from shop.parse import parse_qty
+
+
+@pytest.mark.parametrize("raw", [
+    "3",
+    " 3 ",
+    "3\n",
+])
+def test_parse_qty(raw):
+    assert parse_qty(raw) == 3
+-- head/shop/parse.py --
+def parse_qty(s):
+    return int(s)
+-- head/tests/test_parse.py --
+import pytest
+
+from shop.parse import parse_qty
+
+
+@pytest.mark.parametrize("raw", [
+    "3",
+])
+def test_parse_qty(raw):
+    assert parse_qty(raw) == 3

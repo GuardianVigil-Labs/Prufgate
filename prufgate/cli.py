@@ -4,13 +4,17 @@
 Subcommands:
   - `prufgate check [path] [--changed] [--base REF] [--format text|json|sarif|gitlab|junit|agent-hook] [--ai-adjudicate]`
   - `prufgate test-audit [path] [--changed] [--format text|json]`
-  - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--routes-from FILE] [--max-routes N] [--static-only] [--base REF]`
+  - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--routes-from FILE] [--roles FILE] [--max-routes N] [--static-only] [--base REF]`
   - `prufgate review [--base REF] [--diff-file PATH] [--format markdown|json|sarif|github|reviewdog|gitlab|junit] [--ai]`
+  - `prufgate fix [path] [--base REF] [--format patch|github-suggestions] [--apply] [--force]`
   - `prufgate verify --differential [path] [--base REF] [--test-cmd CMD] [--allow-run-tests]` (runs repository tests: opt-in only)
+  - `prufgate verify --mutation [path] [--base REF] [--tool NAME] [--max-mutants N] [--allow-run-tests]` (runs repository tests: opt-in only)
   - `prufgate init [path] [--hooks] [--agent NAME ...] [--agents-md] [--bugbot] [--overwrite]`
   - `prufgate shell-guard` (Claude Code PreToolUse hook: payload on stdin, exit 2 blocks)
   - `prufgate hook <agent> <event>` (fail-closed coding-agent hook adapters, docs/AGENT_HOOKS.md)
+  - `prufgate transcript FILE [--format text|json|sarif] [--format-in claude|codex|text]` (suspicious commands an agent ran)
   - `prufgate bench [--cases DIR] [--format text|json|markdown] [--rule RULE] [--min-precision X] [--min-recall Y]`
+  - `prufgate export-rules [--format semgrep] [--out FILE] [--pack cti]`
   - `prufgate mcp`
   - `prufgate api [--host 127.0.0.1] [--port 8000]`
   - `prufgate fast` / `prufgate full` (shortcuts for `check --changed` / `check`)
@@ -661,6 +665,21 @@ def _cmd_bola(args: argparse.Namespace) -> int:
                 f"prufgate bola: --routes-from read {len(extra_paths)} GET/HEAD path(s), skipped {skipped} other-method entr(ies).",
                 file=sys.stderr,
             )
+        roles_matrix = None
+        if args.roles:
+            from prufgate.bola.role_matrix import RoleMatrixError, load_role_matrix
+
+            if args.static_only or not args.url:
+                print("prufgate bola: --roles needs --url and cannot be combined with --static-only", file=sys.stderr)
+                return 2
+            try:
+                roles_matrix = load_role_matrix(args.roles)
+            except RoleMatrixError as exc:
+                print(f"prufgate bola: {exc}", file=sys.stderr)
+                return 2
+            if len(roles_matrix[1]) > args.max_routes:
+                print(f"prufgate bola: {args.roles} lists {len(roles_matrix[1])} routes, over --max-routes {args.max_routes}", file=sys.stderr)
+                return 2
         if not args.static_only and args.url:
             from prufgate.netguard import target_url_error
 
@@ -671,10 +690,19 @@ def _cmd_bola(args: argparse.Namespace) -> int:
             if not bola_engine.check_server_active(args.url):
                 print(f"prufgate bola: {args.url} is not reachable; the live probe did not run.", file=sys.stderr)
                 return 2
-            with redirect_stdout(sys.stderr):
-                findings.extend(bola_engine.run_dynamic_matrix(
-                    args.url, workspace=ws, config=cfg, extra_paths=extra_paths, max_extra_paths=args.max_routes,
-                ))
+            if roles_matrix:
+                from prufgate.bola.role_matrix import RoleMatrixError, run_role_matrix
+
+                try:
+                    findings.extend(run_role_matrix(args.url, *roles_matrix))
+                except RoleMatrixError as exc:
+                    print(f"prufgate bola: {exc}", file=sys.stderr)
+                    return 2
+            else:
+                with redirect_stdout(sys.stderr):
+                    findings.extend(bola_engine.run_dynamic_matrix(
+                        args.url, workspace=ws, config=cfg, extra_paths=extra_paths, max_extra_paths=args.max_routes,
+                    ))
         if ws.exists():
             with redirect_stdout(io.StringIO()):
                 findings.extend(bola_engine.run_static_matrix_audit(ws, config=cfg))
@@ -713,21 +741,65 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return rev_engine.main(rev_args)
 
 
-def _cmd_verify(args: argparse.Namespace) -> int:
-    from prufgate import differential
+def _cmd_fix(args: argparse.Namespace) -> int:
+    from prufgate.review import autofix
 
-    if not args.differential:
-        print("prufgate verify: name a mode (--differential)", file=sys.stderr)
+    repo = Path(args.path).resolve()
+    prev = Path.cwd()
+    try:
+        os.chdir(repo)
+        base = resolve_base_ref(args.base, committed=True)
+        if base is None:
+            raise BaseRefError("no base ref to compare with: pass --base or set PRUFGATE_BASE_REF")
+        top = _git_ok("rev-parse", "--show-toplevel")
+        root = Path(top.strip()).resolve() if top else repo
+        plan = autofix.plan_fixes(root, base)
+    except (OSError, ConfigError, autofix.FixError) as exc:
+        print(f"prufgate fix: {exc}", file=sys.stderr)
         return 2
-    if not differential.opted_in(args.allow_run_tests):
+    finally:
+        os.chdir(prev)
+
+    for s in plan.skipped:
+        print(f"no safe fix: {s.path}:{s.line} [{s.rule}] {s.why}", file=sys.stderr)
+    if args.apply:
+        written, refused = autofix.apply_plan(root, plan, force=args.force)
+        for msg in refused:
+            print(f"prufgate fix: not written: {msg}", file=sys.stderr)
+        for path in written:
+            print(f"fixed {path}")
+        if not written and not refused:
+            print(f"prufgate fix: nothing to write ({len(plan.fixes)} fix(es), already applied or none)")
+        return 2 if refused else 0
+    if args.format == "github-suggestions":
+        print(autofix.format_github_suggestions(plan))
+    else:
+        sys.stdout.write(autofix.format_patch(plan))
+    return 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    from prufgate import differential, mutation, repo_runner
+
+    if args.differential == args.mutation:
+        print("prufgate verify: name one mode (--differential or --mutation)", file=sys.stderr)
+        return 2
+    mode = "--differential" if args.differential else "--mutation"
+    if not repo_runner.opted_in(args.allow_run_tests):
         print(
-            "prufgate verify --differential runs the repository's tests, which is code from the repository "
-            f"under review. Run it only in a sandbox or CI, and opt in with --allow-run-tests or {differential.OPT_IN_ENV}=1.",
+            f"prufgate verify {mode} runs the repository's tests, which is code from the repository "
+            f"under review. Run it only in a sandbox or CI, and opt in with --allow-run-tests or {repo_runner.OPT_IN_ENV}=1.",
             file=sys.stderr,
         )
         return 2
-    if args.timeout <= 0:
-        print("prufgate verify: --timeout must be a positive number of seconds", file=sys.stderr)
+    timeout = args.timeout
+    if timeout is None:
+        timeout = differential.DEFAULT_TIMEOUT if args.differential else mutation.DEFAULT_TIMEOUT
+    if timeout <= 0 or args.max_mutants <= 0:
+        print("prufgate verify: --timeout and --max-mutants must be positive numbers", file=sys.stderr)
+        return 2
+    if args.differential and args.tool:
+        print("prufgate verify: --tool applies to --mutation only", file=sys.stderr)
         return 2
     repo = Path(args.path).resolve()
     prev = Path.cwd()
@@ -736,10 +808,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         base = resolve_base_ref(args.base, committed=True)
         if base is None:
             raise BaseRefError("no base ref to compare with: pass --base or set PRUFGATE_BASE_REF")
-        if _git_ok("status", "--porcelain"):
-            print("notice: uncommitted changes are not part of the comparison; it runs on the committed HEAD.", file=sys.stderr)
-        result = differential.run(repo, base, args.test_cmd, args.timeout, args.pass_env)
-    except (OSError, ConfigError, differential.DifferentialError) as exc:
+        if repo_runner.git(repo, "status", "--porcelain").strip():  # without the operator's tokens
+            print("notice: uncommitted changes are not part of the run; it runs on the committed HEAD.", file=sys.stderr)
+        if args.differential:
+            result = differential.run(repo, base, args.test_cmd, timeout, args.pass_env)
+        else:
+            result = mutation.run(repo, base, args.tool, timeout, args.max_mutants, args.pass_env)
+    except (OSError, ConfigError, repo_runner.RunError) as exc:
         print(f"prufgate verify: {exc}", file=sys.stderr)
         return 2
     finally:
@@ -752,6 +827,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(json.dumps(findings, indent=2))
     elif args.format == "sarif":
         print(_format_sarif_findings(findings, repo))
+    elif args.mutation:
+        _print_mutation(result)
     elif not findings:
         if result.overlaid or result.removed:
             print(f"✔ PrufGate differential passed: the base test run ({len(result.overlaid)} file(s) restored, "
@@ -762,6 +839,46 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"✖ PrufGate differential: base tests fail on the head code ({len(findings)} finding(s)):")
         for f in findings:
             print(f"  [{f['severity']}] [{f['rule']}] {f['file']}:{f['line']} — {f['message']}")
+    return 1 if findings else 0
+
+
+def _print_mutation(result: Any) -> None:
+    if not result.files:
+        print("✔ PrufGate mutation: no changed production lines to mutate.")
+        return
+    counts = ", ".join(f"{n} {status}" for status, n in sorted(result.summary.items())) or "no mutants"
+    head = f"{len(result.files)} changed file(s), {', '.join(result.tools)}: {counts} on changed lines"
+    if result.outside:
+        head += f" ({result.outside} outside them, ignored)"
+    if not result.findings:
+        print(f"✔ PrufGate mutation passed: {head}.")
+        return
+    print(f"✖ PrufGate mutation: {head}:")
+    for f in result.findings:
+        print(f"  [{f['severity']}] [{f['rule']}] {f['file']}:{f['line']} — {f['message']}")
+
+
+def _cmd_transcript(args: argparse.Namespace) -> int:
+    from prufgate import transcript
+
+    path = Path(args.file)
+    try:
+        fmt, checked, findings = transcript.scan(path, args.format_in)
+    except transcript.TranscriptError as exc:
+        print(f"prufgate transcript: {transcript.scrub_paths(str(exc))}", file=sys.stderr)
+        return 2
+    for f in findings:
+        f["confidence"] = rule_confidence(f["rule"])
+    if args.format == "json":
+        print(json.dumps(findings, indent=2))
+    elif args.format == "sarif":
+        print(_format_sarif_findings(findings, None))
+    elif not findings:
+        print(f"✔ PrufGate transcript: no suspicious commands ({fmt} transcript, {checked} command(s) checked).")
+    else:
+        print(f"✖ PrufGate transcript: {len(findings)} suspicious command(s) ({fmt} transcript, {checked} checked):")
+        for f in findings:
+            print(f"  [{f['severity']}] [{f['rule']}] line {f['line']} — {f['message']}")
     return 1 if findings else 0
 
 
@@ -868,7 +985,11 @@ def main(argv: list[str] | None = None) -> int:
         "--routes-from", action="append", default=[], metavar="FILE",
         help="Extra GET/HEAD route paths from an OpenAPI/Swagger, Postman v2.1 or HAR file (repeatable); probed on --url only",
     )
-    p_bola.add_argument("--max-routes", type=int, default=200, help="Cap on extra paths from --routes-from (default 200)")
+    p_bola.add_argument("--max-routes", type=int, default=200, help="Cap on extra paths from --routes-from, and on routes in --roles (default 200)")
+    p_bola.add_argument(
+        "--roles", default=None, metavar="FILE",
+        help="Role matrix (YAML): which of your test roles may GET/HEAD which routes; probed on --url instead of the two-token probe",
+    )
 
     # 4. prufgate review
     p_rev = subparsers.add_parser("review", help="Run deterministic + optional BYO-AI PR diff review (Engine 6)")
@@ -884,16 +1005,32 @@ def main(argv: list[str] | None = None) -> int:
     p_rev.add_argument("--ai", action="store_true", help="Delegate semantic diff review to local agent CLI or LLM API")
     p_rev.add_argument("--ai-provider", default="auto", help="AI provider (auto, claude, opencode, codex, gemini, openai, anthropic, ollama)")
 
+    # 4a. prufgate fix
+    p_fix = subparsers.add_parser("fix", help="Deterministic fixes for safe findings: print a patch, or write it with --apply")
+    p_fix.add_argument("path", nargs="?", default=".", help="Repository path")
+    p_fix.add_argument("--base", default=None, help="Base git ref (default: as for check --changed)")
+    p_fix.add_argument("--format", choices=("patch", "github-suggestions"), default="patch")
+    p_fix.add_argument("--apply", action="store_true", help="Write the fixes to the working tree")
+    p_fix.add_argument("--force", action="store_true", help="With --apply, write files that have uncommitted changes")
+
     # 4b. prufgate verify
     p_verify = subparsers.add_parser(
         "verify",
-        help="Run the base branch's tests against the head code (EXECUTES repository code: opt-in, sandbox or CI only)",
+        help="Run the repository's tests: base tests on the head code, or a mutation smoke test "
+        "(EXECUTES repository code: opt-in, sandbox or CI only)",
     )
     p_verify.add_argument("path", nargs="?", default=".", help="Repository path")
     p_verify.add_argument("--differential", action="store_true", help="Run the base ref's test files on the head code")
     p_verify.add_argument("--base", default=None, help="Base git ref (default: as for check --changed)")
     p_verify.add_argument("--test-cmd", default=None, help="Test command (default: detect pytest, npm test or go test)")
-    p_verify.add_argument("--timeout", type=int, default=600, help="Seconds per test run (default 600)")
+    p_verify.add_argument("--mutation", action="store_true",
+                          help="Mutate the changed production lines with an installed mutation tool")
+    p_verify.add_argument("--tool", choices=("mutmut", "stryker", "pit", "gremlins", "go-mutesting", "cargo-mutants"),
+                          default=None, help="With --mutation: the tool to use (default: detect per language)")
+    p_verify.add_argument("--max-mutants", type=int, default=200,
+                          help="With --mutation: mutant cap, where the tool has one (PIT); --timeout bounds the rest")
+    p_verify.add_argument("--timeout", type=int, default=None,
+                          help="Seconds per test run, or for the whole mutation tool run (default 600 / 1800)")
     p_verify.add_argument(
         "--pass-env", action="append", default=[], metavar="NAME", help="Pass this environment variable to the tests; repeat"
     )
@@ -929,6 +1066,12 @@ def main(argv: list[str] | None = None) -> int:
     p_hook.add_argument("agent", choices=AGENTS)
     p_hook.add_argument("event", choices=EVENTS, help="pre-tool (shell/edit guard), shell (Cursor beforeShellExecution), stop")
 
+    # 5c2. prufgate transcript
+    p_tr = subparsers.add_parser("transcript", help="Report git-history lookups, hook skipping and test tampering in an agent transcript")
+    p_tr.add_argument("file", help="Claude Code or Codex CLI session JSONL, or a plain-text shell log")
+    p_tr.add_argument("--format", choices=("text", "json", "sarif"), default="text")
+    p_tr.add_argument("--format-in", choices=("claude", "codex", "text"), default=None, help="Transcript format (default: detect)")
+
     # 5d. prufgate bench
     p_bench = subparsers.add_parser("bench", help="Measure precision and recall of `check --changed` on a labelled corpus")
     p_bench.add_argument("--cases", default=None, help="Corpus directory (default: bench/cases, from a checkout)")
@@ -936,6 +1079,14 @@ def main(argv: list[str] | None = None) -> int:
     p_bench.add_argument("--rule", default=None, help="Score this rule only")
     p_bench.add_argument("--min-precision", type=float, default=None, help="Exit 1 when overall precision is below this")
     p_bench.add_argument("--min-recall", type=float, default=None, help="Exit 1 when overall recall is below this")
+
+    # 5e. prufgate export-rules
+    p_export = subparsers.add_parser(
+        "export-rules", help="Export the single-line pattern rules as Semgrep / Opengrep rules YAML"
+    )
+    p_export.add_argument("--format", choices=("semgrep",), default="semgrep", help="Output format (default: semgrep)")
+    p_export.add_argument("--out", default=None, metavar="FILE", help="Write to FILE instead of standard output")
+    p_export.add_argument("--pack", action="append", choices=("cti",), default=[], help="Also export an opt-in pack's rules")
 
     # 6. prufgate mcp
     subparsers.add_parser("mcp", help="Start PrufGate Model Context Protocol (MCP) stdio server")
@@ -974,6 +1125,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bola(args)
     if args.subcommand == "review":
         return _cmd_review(args)
+    if args.subcommand == "fix":
+        return _cmd_fix(args)
     if args.subcommand == "verify":
         return _cmd_verify(args)
     if args.subcommand == "init":
@@ -986,10 +1139,16 @@ def main(argv: list[str] | None = None) -> int:
         from prufgate.hooks.adapters import main as hook_main
 
         return hook_main(args.agent, args.event)
+    if args.subcommand == "transcript":
+        return _cmd_transcript(args)
     if args.subcommand == "bench":
         from prufgate.bench import main as bench_main
 
         return bench_main(args.cases, args.format, args.rule, args.min_precision, args.min_recall)
+    if args.subcommand == "export-rules":
+        from prufgate.export_rules import main as export_main
+
+        return export_main(args.format, args.out, tuple(args.pack))
     if args.subcommand == "mcp":
         from prufgate.mcp.prufgate_mcp_server import main as mcp_main
 

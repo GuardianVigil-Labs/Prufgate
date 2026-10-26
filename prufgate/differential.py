@@ -27,30 +27,26 @@ How it works:
 
 from __future__ import annotations
 
-import ctypes
 import json
 import os
 import re
 import shlex
 import shutil
-import signal
-import subprocess
 import sys
-import tempfile
-import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from prufgate.diff_guard.fake_exit import TEST_DIR_NAMES, is_test_harness
+from prufgate.repo_runner import OPT_IN_ENV, head_worktree, opted_in  # noqa: F401  (re-exported)
+from prufgate.repo_runner import RunError as DifferentialError
+from prufgate.repo_runner import env as _env
+from prufgate.repo_runner import git as _git
+from prufgate.repo_runner import run_command as _run
 
 RULE = "differential-base-tests-fail"
-OPT_IN_ENV = "PRUFGATE_ALLOW_RUN_TESTS"
 DEFAULT_TIMEOUT = 600
-# The test command gets these variables and nothing else unless `--pass-env` names more:
-# no tokens, keys or cloud credentials from the operator's environment.
-BASE_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TERM", "SYSTEMROOT")
 PYTEST_MARKERS = ("pytest.ini", "conftest.py")
 TMP_PREFIX = "prufgate-differential-"
 # Files that decide what a test run collects or how it judges, besides the tests themselves.
@@ -62,11 +58,6 @@ RUNNER_CONFIG_RE = re.compile(
 # package.json keys restored from the base; head keeps everything else (dependencies, "type", ...).
 _PKG_RUNNER_KEYS = ("jest", "mocha", "ava", "vitest", "c8", "nyc")
 _PKG_TEST_SCRIPT_RE = re.compile(r"^(?:pre|post)?test(?:$|:)")
-_GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
-
-
-class DifferentialError(Exception):
-    """The comparison could not run: exit 2, never a pass."""
 
 
 @dataclass
@@ -75,29 +66,6 @@ class Result:
     overlaid: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
     command: list[str] = field(default_factory=list)
-
-
-def opted_in(flag: bool) -> bool:
-    return flag or os.environ.get(OPT_IN_ENV) == "1"
-
-
-def _git(cwd: Path, *args: str, binary: bool = False) -> Any:
-    """git with repository hooks and fsmonitor off, and without the operator's tokens in its environment."""
-    try:
-        res = subprocess.run(
-            ["git", *_GIT_SAFE, *args],
-            cwd=cwd,
-            capture_output=True,
-            text=not binary,
-            check=True,
-            env=_env([], None),
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        detail = getattr(exc, "stderr", "") or exc
-        if isinstance(detail, bytes):
-            detail = detail.decode("utf-8", "replace")
-        raise DifferentialError(f"git {args[0]} failed: {str(detail).strip()}") from None
-    return res.stdout
 
 
 def part_of_test_run(path: str) -> bool:
@@ -135,91 +103,6 @@ def detect_test_command(root: Path, junit: Path) -> list[str] | None:
     if (root / "go.mod").is_file():
         return ["go", "test", "./..."]
     return None
-
-
-def _env(pass_env: list[str], junit: Path | None) -> dict[str, str]:
-    env = {k: os.environ[k] for k in (*BASE_ENV, *pass_env) if k in os.environ}
-    if junit is not None:
-        env["CI"] = "1"
-        env["PRUFGATE_JUNIT_XML"] = str(junit)
-    return env
-
-
-# Linux: PR_SET_CHILD_SUBREAPER makes every orphaned descendant of the test command (a
-# daemon that double-forked or called setsid) our child, so none survives a run.
-_PR_SET_CHILD_SUBREAPER = 36
-
-
-def _subreaper(on: bool) -> None:
-    if sys.platform.startswith("linux"):
-        try:
-            ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_CHILD_SUBREAPER, int(on), 0, 0, 0)
-        except (OSError, AttributeError):
-            pass
-
-
-def _children(pid: int) -> set[int]:
-    out: set[int] = set()
-    try:
-        for task in os.listdir(f"/proc/{pid}/task"):
-            with open(f"/proc/{pid}/task/{task}/children", encoding="ascii") as fh:
-                out.update(int(c) for c in fh.read().split())
-    except (OSError, ValueError):
-        pass
-    return out
-
-
-def _kill_leftovers(keep: set[int]) -> None:
-    """SIGKILL every descendant of this process except `keep` (children that predate the run), and reap them."""
-    for _ in range(100):  # ponytail: bounded rounds; a fork bomb outrunning 100 rounds of SIGKILL needs cgroups
-        found, todo = set(), list(_children(os.getpid()) - keep)
-        while todo:
-            pid = todo.pop()
-            if pid not in found:
-                found.add(pid)
-                todo.extend(_children(pid))
-        if not found:
-            return
-        for pid in found:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-        for pid in found:
-            try:
-                os.waitpid(pid, 0)
-            except OSError:
-                pass  # not our child (yet): reparented to us on a later round
-
-
-def _run(cmd: list[str], cwd: Path, env: dict[str, str], timeout: int, log: Path) -> tuple[int, str]:
-    """Run the test command in its own process group, output to a file (a detached child holding a pipe
-    cannot stall us). The whole group dies on timeout, and nothing it started outlives the run."""
-    keep = _children(os.getpid())
-    with open(log, "wb") as out:
-        try:
-            proc = subprocess.Popen(
-                cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        except OSError as exc:
-            raise DifferentialError(f"could not start the test command {cmd[0]!r}: {exc}") from None
-        try:
-            rc = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            raise DifferentialError(f"the test command did not finish within {timeout}s") from None
-        finally:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            if proc.returncode is None:
-                proc.kill()
-                proc.wait()
-            _kill_leftovers(keep)
-    with open(log, "rb") as fh:
-        fh.seek(max(0, log.stat().st_size - 4000))
-        return rc, fh.read().decode("utf-8", "replace")
 
 
 def failing_tests(junit: Path, files: list[str]) -> list[tuple[str, str]]:
@@ -326,35 +209,6 @@ def _overlay(wt: Path, writes: list[tuple[str, bytes, int]], removes: list[str])
             fh.write(content)
 
 
-def _owner_alive(tmp: Path) -> bool:
-    try:
-        os.kill(int((tmp / "owner.pid").read_text()), 0)
-    except (ProcessLookupError, FileNotFoundError):
-        return False  # a run writes owner.pid before it adds the worktree: none means an older, killed run
-    except (OSError, ValueError):
-        return True  # unreadable or someone else's process: leave it
-    return True
-
-
-def _prune_stale(root: Path) -> None:
-    """Remove the worktrees of earlier runs that were killed (SIGKILL) before they could clean up."""
-    tmpdir = Path(tempfile.gettempdir()).resolve()
-    for line in _git(root, "worktree", "list", "--porcelain").splitlines():
-        if not line.startswith("worktree "):
-            continue
-        wt = Path(line[len("worktree "):])
-        tmp = wt.parent
-        if wt.name == "head" and tmp.name.startswith(TMP_PREFIX) and tmp.parent.resolve() == tmpdir and not _owner_alive(tmp):
-            subprocess.run(["git", *_GIT_SAFE, "worktree", "remove", "--force", str(wt)], cwd=root,
-                           capture_output=True, env=_env([], None))
-            shutil.rmtree(tmp, ignore_errors=True)
-    subprocess.run(["git", *_GIT_SAFE, "worktree", "prune"], cwd=root, capture_output=True, env=_env([], None))
-
-
-def _exit_on_signal(signum: int, _frame: Any) -> None:
-    raise SystemExit(128 + signum)  # unwinds through every `finally`, so the worktree is removed
-
-
 def run(
     repo: Path,
     base: str,
@@ -365,18 +219,10 @@ def run(
     root = Path(_git(repo, "rev-parse", "--show-toplevel").strip())
     _git(root, "rev-parse", "--verify", "-q", "--end-of-options", f"{base}^{{commit}}")
     base_commit = _git(root, "merge-base", "--end-of-options", base, "HEAD").strip()
-    handlers = {}
-    if threading.current_thread() is threading.main_thread():
-        handlers = {sig: signal.signal(sig, _exit_on_signal) for sig in (signal.SIGTERM, signal.SIGINT)}
-    _prune_stale(root)
-    tmp = Path(tempfile.mkdtemp(prefix=TMP_PREFIX))
-    wt = tmp / "head"
-    junit = tmp / "junit.xml"
-    log = tmp / "output.log"
-    _subreaper(True)
-    try:
-        (tmp / "owner.pid").write_text(str(os.getpid()))
-        _git(root, "worktree", "add", "--detach", "--quiet", str(wt), "HEAD")
+    with head_worktree(root, TMP_PREFIX) as tmp:
+        wt = tmp / "head"
+        junit = tmp / "junit.xml"
+        log = tmp / "output.log"
         cmd = shlex.split(test_cmd) if test_cmd else detect_test_command(wt, junit)
         if not cmd:
             raise DifferentialError(
@@ -419,14 +265,6 @@ def run(
                     _finding(path, f"without this file, which the base does not have, the base tests fail (exit {rc})")
                 )
         return result
-    finally:
-        _subreaper(False)
-        subprocess.run(["git", *_GIT_SAFE, "worktree", "remove", "--force", str(wt)], cwd=root,
-                       capture_output=True, env=_env([], None))
-        shutil.rmtree(tmp, ignore_errors=True)
-        subprocess.run(["git", *_GIT_SAFE, "worktree", "prune"], cwd=root, capture_output=True, env=_env([], None))
-        for sig, old in handlers.items():
-            signal.signal(sig, old)
 
 
 def _finding(path: str, detail: str) -> dict[str, Any]:

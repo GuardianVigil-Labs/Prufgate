@@ -107,6 +107,8 @@ BLOCK_BOUNDARY = re.compile(
 # A bare literal handed back as a result: `return 0.925`, `return 87`, `= 0.92`, `return {"status": "ok"}`.
 LITERAL_RETURN = re.compile(
     r"\breturn\s+(?:0?\.\d+|\d{1,3}(?:\.\d+)?|True|False|true|false|\{\s*[\"']\w+[\"']\s*:|\[\s*\{)\s*(?:$|[#;/])"
+    # a one-line dict or object with a literal number or boolean in it: `return {"id": x, "balance": 1200}`
+    r"|\breturn\s+\{[^}]*?:\s*(?:-?\d|True\b|False\b|true\b|false\b)[^}]*\}"
     r"|\bOk\(\s*(?:0?\.\d+|\d{1,3}(?:\.\d+)?)\s*\)"
 )
 
@@ -313,8 +315,12 @@ JUDGEMENT_FIELDS_DEFAULT = r"risk_?score|risk_?level|score|verdict|approved|seve
 
 
 def _judgement_field(fields: str) -> re.Pattern:
+    """A judgement asked for as a typed JSON field (`"risk_score": number`) or, in prose inside a
+    string, as an instruction (`"Give a risk_score from 0 to 100"`)."""
     return re.compile(
-        rf"""["'](?P<field>{fields})["']\s*:\s*(?:number|string|boolean|int|float|["'])""", re.IGNORECASE
+        rf"""["'](?P<field>{fields})["']\s*:\s*(?:number|string|boolean|int|float|["'])"""
+        rf"""|["'`][^"'`\n]*?\b(?:give|return|assign|provide|output|produce)\s+(?:(?:me|us)\s+)?(?:an?|the)\s+(?:{fields})\b""",
+        re.IGNORECASE,
     )
 
 
@@ -527,13 +533,13 @@ SYNTHETIC_DELAY = re.compile(
     r"""|(?:Thread\.sleep\s*\(\s*\d+\s*\))"""
 )
 SYNTHETIC_MOCK_RETURN = re.compile(
-    r"""return\s+(?:\{[^}]*(?:['"]?(?:success|ok)['"]?\s*:\s*(?:true|True)|['"]?data['"]?\s*:|['"]?status['"]?\s*:\s*['"](?:success|ok)['"]|['"]?items['"]?\s*:)|(?:MOCK_|DEMO_|DUMMY_|FAKE_|fake)\w+)"""
+    r"""return\s+(?:\{[^}]*(?:['"]?(?:success|ok)['"]?\s*:\s*(?:true|True)|['"]?data['"]?\s*:|['"]?status['"]?\s*:\s*['"](?:success|ok|complete|completed|done)['"]|['"]?items['"]?\s*:)|(?:MOCK_|DEMO_|DUMMY_|FAKE_|fake)\w+)"""
     r"""|(?:c\.JSON\s*\(\s*(?:200|http\.StatusOK)\s*,\s*gin\.H\s*\{)"""
     r"""|(?:Ok\s*\(\s*Json\s*\(\s*json!\s*\(\s*\{)"""
 )
 
 MULTI_LANG_ERROR_SWALLOW_RE = re.compile(
-    r"^\s*(?:except(?:\s+[\w.]+(?:\s+as\s+\w+)?)?\s*:|if\s+err\s*!=\s*nil\s*\{|Err\s*\(\s*[_a-zA-Z]\w*\s*\)\s*=>"
+    r"^\s*(?:except(?:\s*\([^)]*\)|\s+[\w.]+)?(?:\s+as\s+\w+)?\s*:|if\s+err\s*!=\s*nil\s*\{|Err\s*\(\s*[_a-zA-Z]\w*\s*\)\s*=>"
     r"|rescue\b(?:\s+[\w:]+)?)"
 )
 # catch blocks in Java, Kotlin, C# and PHP (JS/TS have their own empty-catch rule).
@@ -543,6 +549,10 @@ _OK = r"""(?:ok|success)"""
 MULTI_LANG_CANNED_OK_RE = re.compile(
     r"""return\s+\{\s*['"](?:ok|success|status)['"]\s*:\s*(?:True|true|['"](?:ok|success)['"])"""
     r"""|c\.JSON\s*\(\s*(?:200|http\.StatusOK)\s*,\s*(?:gin\.H|map\[)"""
+    # A decision field answered yes: `return {"approved": True, ...}` (Python, JS)
+    r"""|return\s+\{[^}]*['"](?:approved|authori[sz]ed|verified|valid|allowed|passed)['"]\s*:\s*true\b"""
+    # Go: `if err != nil { return true, nil }`, success and no error on the failure path
+    r"""|(?-i:\breturn\s+true\s*,\s*nil\b)"""
     r"""|Ok\s*\(\s*Json\s*\(\s*json!\s*\(\s*\{\s*["'](?:ok|success)["']\s*:\s*true"""
     # Java / Kotlin: a 200 or an "ok" map handed back from a catch
     r"""|\bResponseEntity\s*\.\s*ok\s*\(|\bResponseEntity\s*\.\s*status\s*\(\s*HttpStatus\.OK\b"""
@@ -556,6 +566,40 @@ MULTI_LANG_CANNED_OK_RE = re.compile(
     rf"""|\brender\s+json:\s*\{{\s*["']?{_OK}["']?\s*(?::|=>)\s*true""",
     re.IGNORECASE,
 )
+
+
+# `except:`, `except Exception:`, `except BaseException as e:` or a tuple naming either
+# (`except (ValueError, Exception):`): a handler that catches everything.
+PY_BROAD_EXCEPT_RE = re.compile(
+    r"^\s*except(?:\s*\((?:\s*[\w.]+\s*,)*\s*(?:Exception|BaseException)\s*(?:,\s*[\w.]+\s*)*,?\s*\)"
+    r"|\s+(?:Exception|BaseException))?(?:\s+as\s+\w+)?\s*:"
+)
+# Functions where swallowing an error is the point: releasing a resource on the way out.
+_PY_CLEANUP_DEF_RE = re.compile(
+    r"^\s*(?:async\s+)?def\s+(?:__(?:a?exit|del)__|_*(?:\w+_)?(?:close|cleanup|clean_up|shutdown|teardown|tear_down|dispose)(?:_\w+)?)\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _in_cleanup_def(lines: list[str], i: int) -> bool:
+    """The Python line lines[i] sits in a `close` / `cleanup` / `shutdown` / `teardown` /
+    `dispose` / `__exit__` / `__del__` function (the nearest enclosing `def`)."""
+    indent = len(lines[i]) - len(lines[i].lstrip())
+    for k in range(i - 1, -1, -1):
+        t = lines[k]
+        if t.strip() and not t.lstrip().startswith(("#", "@")) and len(t) - len(t.lstrip()) < indent:
+            if re.match(r"^\s*(?:async\s+)?def\s", t):
+                return bool(_PY_CLEANUP_DEF_RE.match(t))
+            indent = len(t) - len(t.lstrip())
+    return False
+
+
+def _only_pass(lines: list[str], i: int, end: int) -> bool:
+    """The Python handler at lines[i] (ending before `end`) does nothing: `pass` or `...` only."""
+    body = [lines[i].split(":", 1)[1]] + lines[i + 1 : end]
+    code = [b.split("#", 1)[0].strip() for b in body]
+    code = [c for c in code if c]
+    return bool(code) and all(c in ("pass", "...") for c in code)
 
 
 TRAILING_COMMENT_RE = re.compile(r"\s*(?://(?![^\"'`]*[\"'`]\s*[,;)}\]]).*|/\*.*?\*/)\s*$")
@@ -634,9 +678,19 @@ def generic_fake_findings(rel: str, suffix: str, lines: list[str]) -> list[Findi
             if brace >= 0:  # a brace language: the handler ends at its closing brace
                 close = _closing_line(lines, i, brace, "{", "}")
                 end = (close + 1) if close is not None else end
+            elif suffix == ".py":  # an indented handler ends at the first line not indented under it
+                indent = len(line) - len(line.lstrip())
+                for k in range(i + 1, end):
+                    # A comment line does not end the handler, whatever its indentation.
+                    if lines[k].strip() and not lines[k].lstrip().startswith("#") and len(lines[k]) - len(lines[k].lstrip()) <= indent:
+                        end = k
+                        break
             window = "\n".join(lines[i:end])
             if MULTI_LANG_CANNED_OK_RE.search(window):
                 out.append(Finding(rel, i + 1, "canned-error-fallback", line))
+            # `except Exception: pass` in a close()/cleanup helper is a best-effort release, not a fake.
+            elif suffix == ".py" and PY_BROAD_EXCEPT_RE.match(line) and _only_pass(lines, i, end) and not _in_cleanup_def(lines, i):
+                out.append(Finding(rel, i + 1, "unhandled-empty-catch", line))
         if web_ui_enabled and is_web_ui and FORM_PREVENT_DEFAULT.search(line):
             window = "\n".join(lines[i : i + 12])
             if not ACTIVE_SUBMIT_SIGNAL.search(window):
@@ -782,6 +836,24 @@ SELF_CHECK_CASES: list[tuple[str, str, bool]] = [
         return generate({ prompt: `${ev} Return JSON:
           { "summary": "string", "points": [{ "text": "string", "source": "string" }] }`,
           parse: (v) => v });
+        """,
+        False,
+    ),
+    (
+        "a judgement asked for in prose, with nothing supplied",
+        """
+        from openai import OpenAI
+        prompt = f"Give a risk_score from 0 to 100 and a verdict for the vendor {vendor.name}."
+        resp = client.chat.completions.create(model="m", messages=[{"role": "user", "content": prompt}])
+        """,
+        True,
+    ),
+    (
+        "a summary asked for in prose: no judgement",
+        """
+        from openai import OpenAI
+        prompt = f"Give a short summary of the release notes for {repo.name}."
+        resp = client.chat.completions.create(model="m", messages=[{"role": "user", "content": prompt}])
         """,
         False,
     ),
@@ -935,6 +1007,89 @@ def charge_card(amount: int) -> dict:
         return primary_gateway.charge(amount)
     except Exception:
         return backup_gateway.charge(amount)
+""", None),
+    ("Python failure answered with a hard-coded approval", "app/services/payment.py", """
+def charge(order_id):
+    try:
+        result = gateway.submit(order_id)
+    except Exception:
+        return {"approved": True, "reference": "ok"}
+    return {"approved": result.approved}
+""", "canned-error-fallback"),
+    ("Python failure answered as a decline", "app/services/payment.py", """
+def charge(order_id):
+    try:
+        result = gateway.submit(order_id)
+    except Exception:
+        return {"approved": False, "reason": "gateway"}
+    return {"approved": True, "reference": result.reference}
+""", None),
+    ("Go lookup error answered as valid", "internal/license/check.go", """
+func IsValid(key string) (bool, error) {
+	rec, err := lookup(key)
+	if err != nil {
+		return true, nil
+	}
+	return rec.Active, nil
+}
+""", "canned-error-fallback"),
+    ("Go not-found answered as invalid, without an error", "internal/license/check.go", """
+func IsValid(key string) (bool, error) {
+	rec, err := lookup(key)
+	if err != nil {
+		return false, nil
+	}
+	return rec.Active, nil
+}
+""", None),
+    ("Python broad except swallowed with pass", "app/sync/run.py", """
+def sync(source, target):
+    for item in source.items():
+        try:
+            target.put(item)
+        except Exception:
+            pass
+""", "unhandled-empty-catch"),
+    ("Python bare except: pass on one line", "app/sync/run.py", """
+def sync(source, target):
+    try:
+        target.flush()
+    except: pass
+""", "unhandled-empty-catch"),
+    ("Python narrow except with pass passes", "app/sync/cleanup.py", """
+def cleanup(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+""", None),
+    ("Python broad except that logs passes", "app/sync/run.py", """
+def sync(source, target):
+    try:
+        target.put(item)
+    except Exception:
+        log.exception("put failed")
+        pass
+""", None),
+    ("a literal dict under a 'simulated' comment", "app/accounts/balance.py", """
+def balance(client, account_id):
+    # simulated response until the ledger API is wired up
+    return {"account": account_id, "balance": 1200}
+""", "simulated-return-value"),
+    ("a computed dict under an honest comment passes", "app/accounts/balance.py", """
+def balance(client, account_id):
+    # the ledger answers in cents
+    return {"account": account_id, "balance": client.cents(account_id) / 100}
+""", None),
+    ("a sleep before a fixed 'complete' result", "app/jobs/report.py", """
+def run_report(engine, report_id):
+    time.sleep(2)
+    return {"status": "complete", "rows": 42}
+""", "synthetic-delay-mock"),
+    ("a sleep before the real result passes", "app/jobs/report.py", """
+def run_report(engine, report_id):
+    time.sleep(2)
+    return engine.result(report_id)
 """, None),
     ("Go canned error fallback returning HTTP 200", "internal/api/handler.go", """
 func GetItems(c *gin.Context) {

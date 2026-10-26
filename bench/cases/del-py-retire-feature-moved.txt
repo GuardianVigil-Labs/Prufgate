@@ -1,0 +1,25 @@
+-- label.yaml --
+category: deleted-test
+description: "A module deleted and its function re-created, changed, in a new file; the failing test is deleted as if retired."
+must_fire: [diff-test-file-deleted]
+must_not_fire: []
+-- base/shop/ship.py --
+"""Shipping."""
+
+
+def ship_cost(kg):
+    # base fee plus weight
+    base = 5
+    return base + kg * 2
+-- base/tests/test_ship.py --
+from shop.ship import ship_cost
+
+
+def test_ship_cost():
+    assert ship_cost(1) == 7
+-- head/shop/shipping.py --
+def ship_cost(kg):
+    return 4 + 2 * kg
+
+
+DEFAULT_KG = 1

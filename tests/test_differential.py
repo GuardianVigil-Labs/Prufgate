@@ -342,11 +342,21 @@ class DifferentialTest(unittest.TestCase):
 
 
 class NeverAutomatic(unittest.TestCase):
-    def test_no_automatic_surface_reaches_the_differential_run(self) -> None:
+    def test_no_automatic_surface_reaches_the_differential_or_mutation_run(self) -> None:
+        # verify --differential and verify --mutation run repository code: only the explicit CLI command may.
         root = Path(__file__).resolve().parent.parent
-        paths = [root / "prufgate.sh", *(root / "runners").glob("*"), *(root / "prufgate").glob("*/**/*.py")]
-        hits = [str(p.relative_to(root)) for p in paths if p.is_file() and re.search(r"prufgate[./]differential|import differential|verify --differential", p.read_text(encoding="utf-8", errors="ignore"))]
-        self.assertEqual(hits, [], "verify --differential runs repository code: only the explicit CLI command may call it")
+        paths = [root / "prufgate.sh", *(root / "runners").glob("*"), *(root / "prufgate").glob("*/**/*.py"),
+                 root / "action.yml", *(root / "plugins").glob("**/*.json"), *(root / "plugins").glob("**/*.sh")]
+        pattern = (r"prufgate[./](?:differential|mutation|repo_runner)|import (?:differential|mutation|repo_runner)"
+                   r"|verify --(?:differential|mutation)|--allow-run-tests|PRUFGATE_ALLOW_RUN_TESTS")
+        hits = [str(p.relative_to(root)) for p in paths
+                if p.is_file() and re.search(pattern, p.read_text(encoding="utf-8", errors="ignore"))]
+        self.assertEqual(hits, [], "a surface other than the explicit `prufgate verify` command reaches repository code")
+        # Only the CLI and the two run modules themselves import them at the top level of the package.
+        top = [p.name for p in (root / "prufgate").glob("*.py") if re.search(
+            r"from prufgate(?:\.repo_runner| import [^\n]*\b(?:differential|mutation|repo_runner)\b)|"
+            r"from prufgate\.(?:differential|mutation) import", p.read_text(encoding="utf-8"))]
+        self.assertEqual(sorted(top), ["cli.py", "differential.py", "mutation.py"])
 
 
 if __name__ == "__main__":

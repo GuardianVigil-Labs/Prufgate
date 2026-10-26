@@ -1,0 +1,18 @@
+-- label.yaml --
+category: deleted-test
+description: "A failing Jest test deleted with a fixtures file it imports; the module it tests stays."
+must_fire: [diff-test-file-deleted]
+must_not_fire: []
+-- base/src/round.ts --
+export const round2 = (n: number) => Math.round(n * 100) / 100;
+-- base/src/fixtures.ts --
+export const sample = 1.234;
+-- base/src/round.test.ts --
+import { round2 } from "./round";
+import { sample } from "./fixtures";
+
+test("rounds", () => {
+  expect(round2(sample)).toBe(1.23);
+});
+-- head/src/round.ts --
+export const round2 = (n: number) => n;

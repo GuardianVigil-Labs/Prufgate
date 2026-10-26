@@ -438,6 +438,8 @@ def _compare_configs(head: PrufGateConfig, base: PrufGateConfig, path: str, igno
             finding(f"lowers `registry_check.max_age_days` to {head.registry_max_age_days}")
         if base.registry_check and head.registry_max_lookups < base.registry_max_lookups:
             finding(f"lowers `registry_check.max_lookups` to {head.registry_max_lookups}")
+    if base.ghost_third_party and not head.ghost_third_party:
+        finding("turns the third-party ghost-symbol check off (`ghost_symbols.third_party`)")
     # AI adjudication can hide findings, so turning it on or widening it loosens the gate.
     h_ai, b_ai = head.ai_adjudicate, base.ai_adjudicate
     if h_ai.enabled and not b_ai.enabled:
@@ -1631,6 +1633,64 @@ new file mode 100644
 +\tpytest | tee test.log
 """,
         {"test-script-neutered"},
+    ),
+    (
+        "package-json-inline-scripts-or-true-positive",
+        """diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1,3 +1,3 @@
+ {
+-  "scripts": {"test": "vitest run", "build": "tsc"},
++  "scripts": {"test": "vitest run || true", "build": "tsc"},
+ }
+""",
+        {"test-script-neutered"},
+    ),
+    (
+        "package-json-inline-scripts-runner-switch-negative",
+        """diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1,3 +1,3 @@
+ {
+-  "scripts": {"test": "jest", "build": "tsc"},
++  "scripts": {"test": "vitest run", "build": "tsc || true"},
+ }
+""",
+        set(),
+    ),
+    (
+        "conftest-runner-patch-before-cut-off-fixture-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,4 +1,7 @@
++import unittest
+ import pytest
+\x20
++unittest.TestCase.assertTrue = lambda self, x, msg=None: None
++
+ @pytest.fixture
+ def user():
+""",
+        {"test-runner-monkeypatch"},
+    ),
+    (
+        "conftest-fixture-before-cut-off-fixture-negative",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,4 +1,7 @@
++import unittest
+ import pytest
+\x20
++unittest.TestCase.maxDiff = None
++
+ @pytest.fixture
+ def user():
+""",
+        set(),
     ),
     (
         "vitest-coverage-exclude-negative",

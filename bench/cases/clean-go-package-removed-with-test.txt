@@ -1,0 +1,42 @@
+-- label.yaml --
+category: clean
+description: "A retired Go package removed together with its test."
+must_fire: []
+must_not_fire: [diff-test-file-deleted, diff-test-count-drop]
+-- base/giftwrap/fee.go --
+package giftwrap
+
+func Fee(items int) int { return items * 2 }
+-- base/giftwrap/doc.go --
+// Package giftwrap prices gift wrapping.
+package giftwrap
+-- base/giftwrap/fee_test.go --
+package giftwrap
+
+import "testing"
+
+func TestFee(t *testing.T) {
+	if Fee(3) != 6 {
+		t.Fatal("fee")
+	}
+}
+-- base/cart/total.go --
+package cart
+
+func Total(xs []int) int {
+	t := 0
+	for _, x := range xs {
+		t += x
+	}
+	return t
+}
+-- head/cart/total.go --
+package cart
+
+func Total(xs []int) int {
+	t := 0
+	for _, x := range xs {
+		t += x
+	}
+	return t
+}

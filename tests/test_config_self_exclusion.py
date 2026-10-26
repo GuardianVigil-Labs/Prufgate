@@ -172,6 +172,9 @@ BYPASSES = {
     "registry max age lowered": (
         {CFG: "registry_check: {max_age_days: 30}\n"}, {CFG: "registry_check: {max_age_days: 0}\n"}, (), "P1",
     ),
+    "third-party ghost symbols turned off": (
+        {CFG: "ghost_symbols: {third_party: true}\n"}, {CFG: "version: 1\n"}, (), "P1",
+    ),
     "model call pattern removed": (
         {CFG: 'model_call_patterns: ["llm\\\\.ask"]\n'}, {CFG: "version: 1\n"}, (), "P1",
     ),
