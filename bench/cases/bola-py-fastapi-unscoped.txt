@@ -1,0 +1,27 @@
+-- label.yaml --
+category: bola
+description: "A FastAPI route loads an invoice by id with no tenant filter."
+must_fire: [static-bola-unscoped-access]
+must_not_fire: []
+-- base/requirements.txt --
+fastapi==0.110.0
+sqlalchemy==2.0.29
+-- base/api/__init__.py --
+
+-- head/requirements.txt --
+fastapi==0.110.0
+sqlalchemy==2.0.29
+-- head/api/__init__.py --
+
+-- head/api/invoices.py --
+from fastapi import APIRouter, Depends
+
+from api.deps import db, get_current_user
+from api.models import Invoice
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/invoices/{invoice_id}")
+def get_invoice(invoice_id: str, user=Depends(get_current_user)):
+    return db.query(Invoice).filter_by(id=invoice_id).first()

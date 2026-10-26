@@ -1,0 +1,16 @@
+-- label.yaml --
+category: hollow-test
+description: "expect(true).toBe(true) stands in for a real check."
+must_fire: [tautological-assertion]
+must_not_fire: []
+-- base/src/slug.ts --
+export const slug = (s: string) => s.toLowerCase().replace(/\s+/g, '-');
+-- head/src/slug.ts --
+export const slug = (s: string) => s.toLowerCase().replace(/\s+/g, '-');
+-- head/src/slug.test.ts --
+import { slug } from "./slug";
+
+it("slugifies titles", () => {
+  slug("Hello World");
+  expect(true).toBe(true);
+});

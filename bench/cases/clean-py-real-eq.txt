@@ -1,0 +1,19 @@
+-- label.yaml --
+category: clean
+description: "A value object gains a real __eq__ and __hash__."
+must_fire: []
+must_not_fire: [always-true-equality]
+-- base/shop/money.py --
+class Money:
+    def __init__(self, cents):
+        self.cents = cents
+-- head/shop/money.py --
+class Money:
+    def __init__(self, cents):
+        self.cents = cents
+
+    def __eq__(self, other):
+        return isinstance(other, Money) and other.cents == self.cents
+
+    def __hash__(self):
+        return hash(self.cents)

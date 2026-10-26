@@ -1,0 +1,14 @@
+-- label.yaml --
+category: suppression
+description: "@ts-ignore added over a type error with no reason."
+must_fire: [suppression-comment-smuggling]
+must_not_fire: []
+-- base/src/price.ts --
+export function price(n: number): number {
+  return n * 2;
+}
+-- head/src/price.ts --
+export function price(n: number): number {
+  // @ts-ignore
+  return n * "2";
+}

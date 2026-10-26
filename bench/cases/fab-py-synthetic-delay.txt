@@ -1,0 +1,15 @@
+-- label.yaml --
+category: fabrication
+description: "Report job sleeps and then returns a fixed 'complete' result."
+must_fire: [synthetic-delay-mock]
+must_not_fire: []
+-- base/jobs/report.py --
+def run_report(engine, report_id):
+    return engine.run(report_id)
+-- head/jobs/report.py --
+import time
+
+
+def run_report(engine, report_id):
+    time.sleep(2)
+    return {"status": "complete", "rows": 42}

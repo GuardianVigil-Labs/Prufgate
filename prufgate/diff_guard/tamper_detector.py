@@ -290,7 +290,7 @@ PRUFGATE_CONFIG_RE = re.compile(r"(?:^|/)(?:\.prufgate/(?:config\.ya?ml|fabricat
 # tenant key or evidence marker makes PrufGate accept more code as safe).
 PRUFGATE_WIDENING_SECTIONS = {
     "exempt", "known_debt", "exclude", "allowed_paths", "score_owners", "languages",
-    "auth_guards", "tenant_keys", "evidence_markers",
+    "auth_guards", "tenant_keys", "evidence_markers", "bola", "ai_adjudicate",
 }
 YAML_TOP_KEY_RE = re.compile(r"""^["']?([A-Za-z_][\w-]*)["']?\s*:(.*)$""")
 # Sections whose entries are paths: an entry here that matches every file, or
@@ -426,6 +426,9 @@ def _compare_configs(head: PrufGateConfig, base: PrufGateConfig, path: str, igno
         added = [v for v in getattr(head, name) if v not in getattr(base, name)]
         if added:
             finding(f"widens `{name}` with {', '.join(added)}")
+    added_tables = [t for t in head.bola_global_tables if t.lower() not in {b.lower() for b in base.bola_global_tables}]
+    if added_tables:
+        finding(f"widens `bola.global_tables` with {', '.join(added_tables)}")
     if base.registry_check and not head.registry_check:
         finding("turns the registry check off")
     elif head.registry_check:
@@ -435,6 +438,16 @@ def _compare_configs(head: PrufGateConfig, base: PrufGateConfig, path: str, igno
             finding(f"lowers `registry_check.max_age_days` to {head.registry_max_age_days}")
         if base.registry_check and head.registry_max_lookups < base.registry_max_lookups:
             finding(f"lowers `registry_check.max_lookups` to {head.registry_max_lookups}")
+    # AI adjudication can hide findings, so turning it on or widening it loosens the gate.
+    h_ai, b_ai = head.ai_adjudicate, base.ai_adjudicate
+    if h_ai.enabled and not b_ai.enabled:
+        finding("turns on AI adjudication (`ai_adjudicate`), which can dismiss findings")
+    elif h_ai.enabled:
+        widened = sorted(set(h_ai.confidence) - set(b_ai.confidence))
+        if widened:
+            finding(f"lets AI adjudication dismiss {', '.join(widened)}-confidence findings")
+        if h_ai.max_findings > b_ai.max_findings:
+            finding(f"raises `ai_adjudicate.max_findings` to {h_ai.max_findings}")
     removed = [v for v in base.model_call_patterns if v not in head.model_call_patterns]
     if removed:
         finding(f"removes `model_call_patterns` {', '.join(removed)}")
@@ -659,7 +672,7 @@ def _prufgate_config_findings(hunk: DiffHunk, rel_path: str) -> list[Finding]:
             items = {code.strip()[1:].strip()}
         if tag == "+":
             added_packs |= items
-            if section in PRUFGATE_WIDENING_SECTIONS and code.strip() and (not top or inline not in ("", "{}", "[]")):
+            if section in PRUFGATE_WIDENING_SECTIONS and code.strip() and (not top or inline not in ("", "{}", "[]", "false")):
                 entries = re.findall(r"""[^\s,\[\]"'-][^,\[\]"']*""", inline) if top else [code.strip().lstrip("-").strip()]
                 if section in PRUFGATE_PATH_SECTIONS and any(_disables_prufgate(e) for e in entries):
                     flag(new_ln, raw, f"excludes every file or its own configuration through `{section}`", "P0")
@@ -863,6 +876,21 @@ def scan_diff_for_tampering(
             if not s:
                 continue
             prev_raw = hunk.added_lines[idx - 1][1] if idx > 0 else ""
+
+            # 0. A CI workflow or script that starts asking for AI adjudication, which
+            # can dismiss findings (it applies only when the base configuration allows it).
+            if "--ai-adj" in s and (is_ci_cfg or sfx in (".sh", ".bash") or Path(rel_path).name in ("Makefile", "package.json")):
+                findings.append(
+                    Finding(
+                        path=rel_path,
+                        line=ln,
+                        rule="prufgate-config-self-exemption",
+                        severity="P1",
+                        text=s,
+                        message=f"'{rel_path}:{ln}' adds `--ai-adjudicate`, which lets an AI dismiss findings. "
+                        "A change that silences PrufGate needs a maintainer's review.",
+                    )
+                )
 
             # 1. Fake exits, then skip / focus smuggling
             why_exit = exits.get(ln)
@@ -1816,6 +1844,28 @@ new file mode 100644
 +exclude: ["**"]
 """,
         {"prufgate-config-self-exemption"},
+    ),
+    (
+        "ai-adjudicate-flag-in-workflow-positive",
+        """diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -5,1 +5,2 @@ jobs:
+   - run: prufgate check --changed
++  - run: prufgate check --changed --ai-adjudicate
+""",
+        {"prufgate-config-self-exemption"},
+    ),
+    (
+        "ai-adjudicate-flag-in-source-negative",
+        """diff --git a/src/cli.py b/src/cli.py
+--- a/src/cli.py
++++ b/src/cli.py
+@@ -1,1 +1,2 @@
+ import argparse
++parser.add_argument("--ai-adjudicate", action="store_true")
+""",
+        set(),
     ),
     (
         "prufgate-config-added-pack-negative",

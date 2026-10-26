@@ -1,0 +1,18 @@
+-- label.yaml --
+category: contract
+description: "Frontend fetches an /api path no backend route defines."
+must_fire: [frontend-backend-route-mismatch]
+must_not_fire: []
+-- base/app/api/orders/route.ts --
+export async function GET() {
+  return Response.json([]);
+}
+-- base/src/orders.ts --
+export const load = () => fetch("/api/orders").then((r) => r.json());
+-- head/app/api/orders/route.ts --
+export async function GET() {
+  return Response.json([]);
+}
+-- head/src/orders.ts --
+export const load = () => fetch("/api/orders").then((r) => r.json());
+export const loadInvoices = () => fetch("/api/invoices/summary").then((r) => r.json());

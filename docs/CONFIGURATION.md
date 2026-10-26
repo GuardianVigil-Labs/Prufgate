@@ -25,6 +25,7 @@ When a run compares against a base ref (`prufgate check --changed` or `--base`, 
 | `exclude` (alias `allowed_paths`) | list of paths/globs | build output, dependencies | Paths no engine scans. |
 | `auth_guards` | list | none (added to the built-ins) | Extra function or decorator names that count as an authentication check for engine 5. Built in: `assert*`, `verify*`, `require*`, `protect*`, `auth()`, `getSession`, `getCurrentUser`, `get_current_user`, `Depends(get_current_*)`, `@login_required`, `@UseGuards`, `@PreAuthorize`, `@Secured`, `authenticate_user!`, Laravel `auth` middleware and similar. |
 | `tenant_keys` | list | none (added to the built-ins) | Extra column or field names that scope a query to a tenant or owner. Built in: `tenant_id`, `organization_id`, `org_id`, `workspace_id`, `user_id`, `owner_id`, `account_id`, `customer_id`, in snake_case and camelCase. |
+| `bola` | mapping | none | Engine 5 settings. `global_tables`: tables shared by every tenant (`[countries, currencies]`) that `BOLA-TABLE-MISSING-TENANT-COLUMN` skips. Only listed tables are skipped. Adding a table is reported by the diff guard like other exemptions. |
 | `score_owners` | list of paths | none | Files that are allowed to compute scores or verdicts (engine 1 flags scores computed anywhere else). |
 | `model_call_patterns` | list of regexes | common LLM SDKs | Extra patterns that identify an LLM call for the unseeded-prompt rule. |
 | `evidence_markers` | list of regexes | common forms | Patterns that show runtime evidence is passed into a prompt. |
@@ -32,6 +33,7 @@ When a run compares against a base ref (`prufgate check --changed` or `--base`, 
 | `known_debt` | see below | none | Ratcheting ceilings for rules you cannot fix yet. |
 | `registry_check` | `true`, `false` or a mapping | `false` | Look up dependencies added in the diff on their public registry (engine 4). See [registry check](#registry-check). |
 | `enable_low_confidence` | boolean | `false` | Turn on low-confidence rules. See [confidence](#confidence). |
+| `ai_adjudicate` | `true`, `false` or a mapping | `false` | Let an AI provider dismiss low-confidence findings it judges not real. See [AI adjudication](#ai-adjudication). |
 
 Paths in `exclude`, `exempt` and `known_debt` match a file exactly, a directory and everything below it, or a glob (`src/legacy/**`). They never match a substring, so `a.ts` does not cover `data.ts`.
 
@@ -74,6 +76,30 @@ A rule that is off is not reported and does not block, everywhere PrufGate repor
 ```yaml
 enable_low_confidence: true
 ```
+
+## AI adjudication
+
+Off by default: it sends code to a provider, and it can dismiss findings. Only the configuration turns it on: `ai_adjudicate: true` (or a mapping) turns it on for `prufgate check` and the `prufgate.sh` gate. In a run with a base ref that is the configuration at the base, so a change cannot turn it on for itself. `prufgate check --ai-adjudicate` is a request: without `ai_adjudicate` enabled in the configuration in effect it prints a notice and runs without AI. No environment variable turns it on. The MCP server, the REST API and the agent hooks never call it: `--format agent-hook` and `PRUFGATE_NO_AI_ADJUDICATE` (which they set) switch it off.
+
+```yaml
+ai_adjudicate:
+  confidence: [low]        # which findings are sent: low and/or medium; high never is
+  max_findings: 20         # provider calls per run (0 to 500); findings past it are kept
+  timeout: 30              # seconds per call (1 to 300)
+  context_lines: 8         # lines either side of the finding (0 to 50)
+  max_window_bytes: 2000   # cap on the code sent per finding (200 to 16000)
+```
+
+Low-confidence rules are reported only with `enable_low_confidence: true`, so with the default `confidence: [low]` turn that on too.
+
+For each eligible finding the provider gets a fixed prompt: the rule ID, its confidence and description, the finding message and the code window, the last two between random delimiters and marked as untrusted data whose instructions must be ignored. The window is built around the finding's own line, so context never pushes that line out. A window or message holding anything that looks like a credential (values of credential-like environment variables, common token shapes, strings assigned to secret-named keys) is not sent at all: the judge never sees a placeholder where the code was. The reply must be exactly `{"real": true|false, "reason": "..."}`.
+
+- **Only downgrades.** `real: false` hides the finding from blocking and lists it as AI-dismissed with the reason: in `prufgate check` text output, in the Markdown report (section "AI-dismissed"), and in SARIF as a result with `suppressions: [{kind: external, justification: "AI-dismissed: ..."}]`, which code scanning shows as dismissed. `--format json`, GitLab Code Quality and JUnit leave dismissed findings out. Nothing is added or raised, and `known_debt` ceilings count findings before adjudication.
+- **Fails closed.** No provider, a provider error or timeout, or any other reply keeps the finding exactly as it would be without AI. So does a code window or message that addresses the judge (the words AI, LLM, judge, reviewer, grader, evaluator, assistant, bot, instructions, a model name, "PrufGate", "model reading this", "ignore previous", "false positive", "verdict", or `real` set to false): it is not sent at all. The text is normalised first (NFKC, Cyrillic and Greek lookalike letters folded, zero-width characters, `_`, `-` and camelCase read as word breaks, lines joined), so `note_for_ai_reviewer` or a phrase split across comment lines is caught too.
+- **PrufGate's own rules only.** A finding is sent only when its rule is listed with a confidence in PrufGate's rule table. Findings from gitleaks, zizmor and ast-grep, unlisted rules, and AI review comments are never sent, whatever `confidence` says.
+- **Budget and cache.** At most `max_findings` findings judged per run, cached verdicts included. Verdicts are cached in `$XDG_CACHE_HOME/prufgate/adjudicate.json` (default `~/.cache`) by rule, SARIF fingerprint and a hash of the code window, so an unchanged finding is not sent again; errors are not cached. The agent shell guard refuses writes to that file.
+- **Provider.** `--ai-provider` or `PRUFGATE_AI_PROVIDER` (default `auto`), the same providers as `prufgate review --ai`.
+- **Configuration drift.** With a base ref the setting is read at the base like every other key; a changed scan with no base reads it at HEAD. A full scan in a git repository needs it on at the base (else HEAD) too. A change that turns `ai_adjudicate` on, adds a confidence level or raises `max_findings` is not applied and is reported as `prufgate-config-self-exemption`. So is a CI workflow or script (`.sh`, `Makefile`, `package.json`) that adds `--ai-adjudicate`. Options are never abbreviated (`--ai-adj` is an error).
 
 ## Suppressing findings
 
@@ -144,7 +170,9 @@ Engine 3 reports a diff that adds a new exemption, debt entry or score owner to 
 | `PRUFGATE_ALLOW_RUN_TESTS` | `verify` | `1` lets `prufgate verify --differential` run the repository's tests, as `--allow-run-tests` does. Off by default: the tests are code from the repository under review. Set it only in a sandbox or disposable CI job. |
 | `PRUFGATE_INFO_URI` | reports | The `informationUri` written into SARIF. |
 | `PRUFGATE_AI_MODEL` | engine 6 | Model name for `--ai` with an API provider. |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST` | engine 6 | Providers for `prufgate review --ai`. Never written to output. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST` | engine 6 | Providers for `prufgate review --ai` and AI adjudication. Never written to output. |
+| `PRUFGATE_AI_PROVIDER` | `check`, gate | Provider for AI adjudication (default `auto`). |
+| `PRUFGATE_NO_AI_ADJUDICATE` | `check`, gate | Any value switches AI adjudication off. Set by the MCP server, the REST API and the agent hooks. |
 | `PRUFGATE_API_TOKEN` | API | Bearer token for every scan and report route. Generated and printed once when unset on loopback. |
 | `PRUFGATE_API_HOST` | API | Bind address (default `127.0.0.1`). A non-loopback address needs `PRUFGATE_API_TOKEN`. |
 | `PRUFGATE_WORKSPACE_ROOT` | API | Scans are confined to this directory; anything resolving outside it, including through a symlink, is refused. |
@@ -153,6 +181,6 @@ Engine 3 reports a diff that adds a new exemption, debt entry or score owner to 
 | `PRUFGATE_API_MAX_SCANS`, `PRUFGATE_API_SCAN_TIMEOUT` | API | Concurrent scan limit, and seconds per scan (default 600). |
 | `PRUFGATE_MCP_TIMEOUT` | MCP | Seconds per tool call (default 300). |
 | `PRUFGATE_REGISTRY_CHECK` | engine 4 | `1` turns the registry check on, as `registry_check: true` does. It cannot turn off a check the configuration turns on. |
-| `XDG_CACHE_HOME` | engine 4 | Where the registry check keeps its cache (`prufgate/registry.json`; default `~/.cache`). |
+| `XDG_CACHE_HOME` | engine 4, adjudication | Where the registry check and AI adjudication keep their caches (`prufgate/registry.json`, `prufgate/adjudicate.json`; default `~/.cache`). |
 | `PRUFGATE_ALLOW_LINK_LOCAL` | MCP, API | `1` allows link-local probe targets, which are refused by default (cloud metadata endpoints). |
 | `PRUFGATE_IMAGE`, `PRUFGATE_DIR` | `bin/prufgate` | Image for `--docker` (required: none is published), and the checkout to run. |

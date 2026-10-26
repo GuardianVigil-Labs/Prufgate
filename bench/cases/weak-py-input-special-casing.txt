@@ -1,0 +1,33 @@
+-- label.yaml --
+category: weakened-test
+description: "Production code gains a branch for the exact id the test uses."
+must_fire: [test-input-special-casing]
+must_not_fire: []
+-- base/auth/perm.py --
+def can_edit(user_id, doc):
+    return doc.owner_id == user_id
+-- base/tests/test_perm.py --
+from auth.perm import can_edit
+
+
+class Doc:
+    owner_id = "owner-1"
+
+
+def test_reviewer_can_edit():
+    assert can_edit("reviewer-77", Doc())
+-- head/auth/perm.py --
+def can_edit(user_id, doc):
+    if user_id == "reviewer-77":
+        return True
+    return doc.owner_id == user_id
+-- head/tests/test_perm.py --
+from auth.perm import can_edit
+
+
+class Doc:
+    owner_id = "owner-1"
+
+
+def test_reviewer_can_edit():
+    assert can_edit("reviewer-77", Doc())

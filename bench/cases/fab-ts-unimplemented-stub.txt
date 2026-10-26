@@ -1,0 +1,17 @@
+-- label.yaml --
+category: fabrication
+description: "Refund handler throws a TODO error instead of refunding."
+must_fire: [unimplemented-production-stub]
+must_not_fire: []
+-- base/src/refunds.ts --
+export function refundTotal(items: number[]): number {
+  return items.reduce((a, b) => a + b, 0);
+}
+-- head/src/refunds.ts --
+export function refundTotal(items: number[]): number {
+  return items.reduce((a, b) => a + b, 0);
+}
+
+export async function issueRefund(orderId: string): Promise<void> {
+  throw new Error("TODO");
+}

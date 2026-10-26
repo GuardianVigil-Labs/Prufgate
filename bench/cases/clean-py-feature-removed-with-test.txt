@@ -1,0 +1,20 @@
+-- label.yaml --
+category: clean
+description: "A retired feature removed together with its tests."
+must_fire: []
+must_not_fire: [diff-test-file-deleted]
+-- base/shop/coupons.py --
+def apply(code, total):
+    return total * 0.9 if code == 'SPRING' else total
+-- base/shop/cart.py --
+def total(xs):
+    return sum(xs)
+-- base/tests/test_coupons.py --
+from shop.coupons import apply
+
+
+def test_spring():
+    assert apply('SPRING', 100) == 90
+-- head/shop/cart.py --
+def total(xs):
+    return sum(xs)

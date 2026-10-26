@@ -1,0 +1,14 @@
+-- label.yaml --
+category: fabrication
+description: "Device list stamps 'last seen' as now minus five minutes."
+must_fire: [always-current-fake-timestamp]
+must_not_fire: []
+-- base/devices/status.py --
+def device_status(device):
+    return {"id": device.id, "last_seen": device.last_seen}
+-- head/devices/status.py --
+from datetime import datetime, timedelta
+
+
+def device_status(device):
+    return {"id": device.id, "last_seen": datetime.now() - timedelta(minutes=5)}

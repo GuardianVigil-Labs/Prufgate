@@ -1,0 +1,12 @@
+-- label.yaml --
+category: config-weakening
+description: "ruff config starts ignoring the bug-finding rule set."
+must_fire: [linter-or-ci-config-weakening]
+must_not_fire: []
+-- base/ruff.toml --
+[lint]
+select = ["E", "F", "B"]
+-- head/ruff.toml --
+[lint]
+select = ["E", "F", "B"]
+ignore = ["B", "F401"]

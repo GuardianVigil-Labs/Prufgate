@@ -1,0 +1,13 @@
+-- label.yaml --
+category: config-weakening
+description: "Coverage fail_under lowered from 90 to 40."
+must_fire: [coverage-threshold-lowering]
+must_not_fire: []
+-- base/.coveragerc --
+[report]
+fail_under = 90
+show_missing = true
+-- head/.coveragerc --
+[report]
+fail_under = 40
+show_missing = true

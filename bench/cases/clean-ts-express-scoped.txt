@@ -1,0 +1,35 @@
+-- label.yaml --
+category: clean
+description: "An Express route behind auth that scopes by owner."
+must_fire: []
+must_not_fire: [static-bola-unscoped-access]
+-- base/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- base/src/server.ts --
+import express from "express";
+
+export const app = express();
+-- head/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- head/src/server.ts --
+import express from "express";
+import { requireAuth } from "./auth";
+
+export const app = express();
+
+app.get("/api/projects/:id", requireAuth, async (req, res) => {
+  const proj = await prisma.project.findFirst({ where: { id: req.params.id, ownerId: req.user.id } });
+  return res.json(proj);
+});

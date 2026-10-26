@@ -71,8 +71,12 @@ DIFF_ARGS=("--changed${BASE_REF:+=${BASE_REF}}")
 # The reviewer diffs <base>...HEAD; with no base, HEAD...HEAD is empty and it
 # falls back to the working-tree diff.
 REVIEW_ARGS=("--base=${BASE_REF:-HEAD}")
-# The synthesizer reads the baseline at the same base ref (the changed scope only).
-[ "${FULL}" -eq 0 ] && printf '%s\n' "${BASE_REF}" >"${RAW_DIR}/base_ref"
+# The synthesizer reads the configuration and baseline at the same base ref (an
+# empty file means HEAD). A full scan in a git repository does too, so a branch
+# cannot turn on ai_adjudicate or widen its baseline for itself.
+if [ "${FULL}" -eq 0 ] || in_git_repo; then
+  printf '%s\n' "${BASE_REF}" >"${RAW_DIR}/base_ref"
+fi
 
 echo "▶ [PrufGate] Starting verification gate (scope: ${SCAN_SCOPE}${BASE_REF:+, base: ${BASE_REF}})"
 

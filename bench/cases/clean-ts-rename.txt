@@ -1,0 +1,17 @@
+-- label.yaml --
+category: clean
+description: "Refactor: variables renamed for clarity."
+must_fire: []
+must_not_fire: []
+-- base/src/cart.ts --
+export function sum(a: number[]): number {
+  let t = 0;
+  for (const x of a) t += x;
+  return t;
+}
+-- head/src/cart.ts --
+export function sum(prices: number[]): number {
+  let total = 0;
+  for (const price of prices) total += price;
+  return total;
+}

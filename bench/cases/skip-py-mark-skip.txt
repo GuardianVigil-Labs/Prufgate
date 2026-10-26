@@ -1,0 +1,26 @@
+-- label.yaml --
+category: skipped-test
+description: "A failing test silenced with pytest.mark.skip and no issue."
+must_fire: [test-skip-smuggling]
+must_not_fire: []
+-- base/shop/parse.py --
+def parse_qty(s):
+    return int(s.strip())
+-- base/tests/test_parse.py --
+from shop.parse import parse_qty
+
+
+def test_parse_qty_spaces():
+    assert parse_qty(" 4 ") == 4
+-- head/shop/parse.py --
+def parse_qty(s):
+    return int(s)
+-- head/tests/test_parse.py --
+import pytest
+
+from shop.parse import parse_qty
+
+
+@pytest.mark.skip(reason="fails")
+def test_parse_qty_spaces():
+    assert parse_qty(" 4 ") == 4

@@ -1,0 +1,19 @@
+-- label.yaml --
+category: fabrication
+description: "Inventory lookup answers a failed fetch with an in-stock literal."
+must_fire: [canned-error-fallback]
+must_not_fire: []
+-- base/src/inventory.ts --
+export async function stockLevel(sku: string): Promise<{ inStock: boolean; count: number }> {
+  const res = await fetch(`/inventory/${sku}`);
+  return res.json();
+}
+-- head/src/inventory.ts --
+export async function stockLevel(sku: string): Promise<{ inStock: boolean; count: number }> {
+  try {
+    const res = await fetch(`/inventory/${sku}`);
+    return res.json();
+  } catch (err) {
+    return { inStock: true, count: 100 };
+  }
+}

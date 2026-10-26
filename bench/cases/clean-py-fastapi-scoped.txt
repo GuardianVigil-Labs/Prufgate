@@ -1,0 +1,27 @@
+-- label.yaml --
+category: clean
+description: "A FastAPI route scoped by the caller's tenant."
+must_fire: []
+must_not_fire: [static-bola-unscoped-access]
+-- base/requirements.txt --
+fastapi==0.110.0
+sqlalchemy==2.0.29
+-- base/api/__init__.py --
+
+-- head/requirements.txt --
+fastapi==0.110.0
+sqlalchemy==2.0.29
+-- head/api/__init__.py --
+
+-- head/api/orders.py --
+from fastapi import APIRouter, Depends
+
+from api.deps import db, get_current_user
+from api.models import Order
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/orders/{order_id}")
+def get_order(order_id: str, user=Depends(get_current_user)):
+    return db.query(Order).filter_by(id=order_id, tenant_id=user.tenant_id).first()

@@ -1,0 +1,13 @@
+-- label.yaml --
+category: fabrication
+description: "An LLM is asked for a risk score with no evidence in the prompt."
+must_fire: [prompt-invents-finding]
+must_not_fire: []
+-- base/review/risk.py --
+def risk_for(vendor):
+    return vendor.computed_risk
+-- head/review/risk.py --
+def risk_for(client, vendor):
+    prompt = f"Give a risk_score from 0 to 100 and a verdict for the vendor {vendor.name}."
+    resp = client.chat.completions.create(model="m", messages=[{"role": "user", "content": prompt}])
+    return resp.choices[0].message.content

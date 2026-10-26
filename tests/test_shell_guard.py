@@ -145,6 +145,7 @@ BLOCKED = [
     "mv --target-directory=/tmp tests",
     "mv /tmp/empty .pre-commit-config.yaml",
     "mv /tmp/x.py tests/test_a.py",
+    "echo '{}' > ~/.cache/prufgate/adjudicate.json",  # the AI adjudication verdict cache
 ]
 
 ALLOWED = [
@@ -196,6 +197,7 @@ ALLOWED = [
     "mv -t tests/ src/helper.py",
     "mv src/ci.yml .github/workflows/",
     "",
+    "rm -rf prufgate",  # a source directory, not the adjudication cache
 ]
 
 

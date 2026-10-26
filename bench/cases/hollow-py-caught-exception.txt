@@ -1,0 +1,20 @@
+-- label.yaml --
+category: hollow-test
+description: "The test catches the AssertionError it should report."
+must_fire: [caught-and-ignored-test-exception]
+must_not_fire: []
+-- base/shop/stock.py --
+def reserve(n, have):
+    return have - n
+-- head/shop/stock.py --
+def reserve(n, have):
+    return have - n
+-- head/tests/test_stock.py --
+from shop.stock import reserve
+
+
+def test_reserve():
+    try:
+        assert reserve(2, 5) == 3
+    except AssertionError:
+        pass

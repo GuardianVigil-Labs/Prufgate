@@ -1,0 +1,41 @@
+-- label.yaml --
+category: clean
+description: "One test file split into two, every test kept."
+must_fire: []
+must_not_fire: [diff-test-file-deleted, diff-test-count-drop]
+-- base/shop/cart.py --
+def total(xs):
+    return sum(xs)
+
+
+def count(xs):
+    return len(xs)
+-- base/tests/test_shop.py --
+from shop.cart import count, total
+
+
+def test_total():
+    assert total([1, 2]) == 3
+
+
+def test_count():
+    assert count([1, 2]) == 2
+-- head/shop/cart.py --
+def total(xs):
+    return sum(xs)
+
+
+def count(xs):
+    return len(xs)
+-- head/tests/test_total.py --
+from shop.cart import total
+
+
+def test_total():
+    assert total([1, 2]) == 3
+-- head/tests/test_count.py --
+from shop.cart import count
+
+
+def test_count():
+    assert count([1, 2]) == 2

@@ -1,0 +1,27 @@
+-- label.yaml --
+category: clean
+description: "Bug fix: an off-by-one in a pagination bound, with a test."
+must_fire: []
+must_not_fire: []
+-- base/page/page.go --
+package page
+
+func Last(total, size int) int {
+	return total / size
+}
+-- head/page/page.go --
+package page
+
+func Last(total, size int) int {
+	return (total + size - 1) / size
+}
+-- head/page/page_test.go --
+package page
+
+import "testing"
+
+func TestLast(t *testing.T) {
+	if got := Last(11, 5); got != 3 {
+		t.Fatalf("Last(11, 5) = %d", got)
+	}
+}

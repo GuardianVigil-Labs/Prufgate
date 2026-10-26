@@ -152,7 +152,7 @@ def shell_reason(payload: dict[str, Any]) -> str | None:
 def run_check(cwd: str) -> tuple[int, str]:
     """Run `prufgate check --changed` in `cwd`: (exit code, what to tell the agent)."""
     package_parent = str(Path(__file__).resolve().parent.parent.parent)
-    env = dict(os.environ)
+    env = dict(os.environ, PRUFGATE_NO_AI_ADJUDICATE="1")
     env["PYTHONPATH"] = os.pathsep.join(p for p in (package_parent, env.get("PYTHONPATH", "")) if p)
     try:
         r = subprocess.run(

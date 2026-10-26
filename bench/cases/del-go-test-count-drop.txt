@@ -1,0 +1,43 @@
+-- label.yaml --
+category: deleted-test
+description: "A Go test function removed from the package."
+must_fire: [diff-test-count-drop]
+must_not_fire: []
+-- base/calc/div.go --
+package calc
+
+func Div(a, b int) int {
+	return a / b
+}
+-- base/calc/div_test.go --
+package calc
+
+import "testing"
+
+func TestDiv(t *testing.T) {
+	if Div(6, 3) != 2 {
+		t.Fatal("6/3")
+	}
+}
+
+func TestDivNegative(t *testing.T) {
+	if Div(-6, 3) != -2 {
+		t.Fatal("-6/3")
+	}
+}
+-- head/calc/div.go --
+package calc
+
+func Div(a, b int) int {
+	return a / b
+}
+-- head/calc/div_test.go --
+package calc
+
+import "testing"
+
+func TestDiv(t *testing.T) {
+	if Div(6, 3) != 2 {
+		t.Fatal("6/3")
+	}
+}

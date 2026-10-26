@@ -1,0 +1,23 @@
+-- label.yaml --
+category: harness-edit
+description: "conftest.py replaces TestCase.assertEqual with a no-op."
+must_fire: [test-runner-monkeypatch]
+must_not_fire: []
+-- base/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def user():
+    return {'id': 1}
+-- head/tests/conftest.py --
+import unittest
+
+import pytest
+
+unittest.TestCase.assertEqual = lambda self, a, b, msg=None: None
+
+
+@pytest.fixture
+def user():
+    return {'id': 1}

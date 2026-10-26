@@ -1,0 +1,29 @@
+-- label.yaml --
+category: clean
+description: "Error handling: log and re-raise with context."
+must_fire: []
+must_not_fire: [canned-error-fallback, unhandled-empty-catch]
+-- base/billing/charge.py --
+from billing.gateway import submit
+
+
+def charge(order_id, amount):
+    return submit(order_id, amount)
+-- head/billing/charge.py --
+import logging
+
+from billing.gateway import GatewayError, submit
+
+log = logging.getLogger(__name__)
+
+
+class ChargeFailed(Exception):
+    pass
+
+
+def charge(order_id, amount):
+    try:
+        return submit(order_id, amount)
+    except GatewayError as exc:
+        log.warning("charge failed for an order: %s", exc.__class__.__name__)
+        raise ChargeFailed(str(order_id)) from exc

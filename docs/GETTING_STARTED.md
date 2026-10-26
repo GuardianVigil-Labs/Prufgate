@@ -29,7 +29,7 @@ prufgate --self-check      # runs every engine against its built-in positive and
 ## Commands
 
 ```text
-prufgate check [PATH] [--changed] [--base REF] [--config FILE] [--format text|json|sarif|gitlab|junit|agent-hook]
+prufgate check [PATH] [--changed] [--base REF] [--config FILE] [--format text|json|sarif|gitlab|junit|agent-hook] [--ai-adjudicate [--ai-provider NAME]]
 prufgate fast                     same as: prufgate check --changed
 prufgate full                     same as: prufgate check
 prufgate test-audit [PATH] [--changed] [--base REF] [--config FILE] [--json-out FILE]

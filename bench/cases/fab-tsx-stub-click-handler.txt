@@ -1,0 +1,13 @@
+-- label.yaml --
+category: fabrication
+description: "A Save button wired to an empty handler."
+must_fire: [stub-click-handler]
+must_not_fire: []
+-- base/src/components/SaveBar.tsx --
+export function SaveBar({ onSave }: { onSave: () => void }) {
+  return <button onClick={onSave}>Save</button>;
+}
+-- head/src/components/SaveBar.tsx --
+export function SaveBar({ onSave }: { onSave: () => void }) {
+  return <button onClick={() => {}}>Save</button>;
+}

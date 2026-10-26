@@ -1,0 +1,19 @@
+-- label.yaml --
+category: harness-edit
+description: "A value object gains __eq__ that is always True."
+must_fire: [always-true-equality]
+must_not_fire: []
+-- base/shop/money.py --
+class Money:
+    def __init__(self, cents):
+        self.cents = cents
+
+    def __eq__(self, other):
+        return isinstance(other, Money) and other.cents == self.cents
+-- head/shop/money.py --
+class Money:
+    def __init__(self, cents):
+        self.cents = cents
+
+    def __eq__(self, other):
+        return True

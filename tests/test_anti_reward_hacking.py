@@ -141,6 +141,23 @@ class TestAntiRewardHackingEngine(unittest.TestCase):
         findings_py = scan_test_file(Path("tests/test_tax.py"), py_self_mock)
         self.assertEqual([f.rule for f in findings_py], ["self-mocked-unit-under-test"])
 
+    def test_main_guard_is_not_special_casing_a_test_literal(self) -> None:
+        diff_text = """diff --git a/tests/test_cli.py b/tests/test_cli.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_cli.py
+@@ -0,0 +1,2 @@
++def test_module_name():
++    assert run_module("__main__") == 0
+diff --git a/scripts/tool.py b/scripts/tool.py
+--- a/scripts/tool.py
++++ b/scripts/tool.py
+@@ -1,1 +1,3 @@
++if __name__ == "__main__":
++    main()
+"""
+        self.assertEqual(scan_diff_for_reward_hacking(diff_text), [])
+
     def test_evilgenie_cross_diff_special_casing(self) -> None:
         diff_text = """diff --git a/tests/test_tax.py b/tests/test_tax.py
 new file mode 100644

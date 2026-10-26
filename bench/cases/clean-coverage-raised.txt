@@ -1,0 +1,11 @@
+-- label.yaml --
+category: clean
+description: "Coverage threshold raised."
+must_fire: []
+must_not_fire: [coverage-threshold-lowering]
+-- base/.coveragerc --
+[report]
+fail_under = 80
+-- head/.coveragerc --
+[report]
+fail_under = 85

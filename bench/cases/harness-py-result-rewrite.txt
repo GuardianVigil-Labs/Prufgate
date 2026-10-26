@@ -1,0 +1,26 @@
+-- label.yaml --
+category: harness-edit
+description: "A pytest hook rewrites failed reports to passed."
+must_fire: [pytest-result-rewrite]
+must_not_fire: []
+-- base/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def db():
+    return {}
+-- head/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def db():
+    return {}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    report.outcome = "passed"

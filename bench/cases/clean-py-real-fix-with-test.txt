@@ -1,0 +1,17 @@
+-- label.yaml --
+category: clean
+description: "A rounding bug fixed and a test added."
+must_fire: []
+must_not_fire: []
+-- base/shop/discount.py --
+def discount(p):
+    return int(p * 0.9)
+-- head/shop/discount.py --
+def discount(p):
+    return round(p * 0.9, 2)
+-- head/tests/test_discount.py --
+from shop.discount import discount
+
+
+def test_discount_keeps_cents():
+    assert discount(9.99) == 8.99

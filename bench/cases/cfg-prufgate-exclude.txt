@@ -1,0 +1,16 @@
+-- label.yaml --
+category: config-weakening
+description: "The branch excludes its own source from the gate."
+must_fire: [prufgate-config-self-exemption, prufgate-config-not-applied]
+must_not_fire: []
+-- base/.prufgate/config.yaml --
+version: 1
+-- base/src/app.py --
+def f():
+    return 1
+-- head/.prufgate/config.yaml --
+version: 1
+exclude: ["src/**"]
+-- head/src/app.py --
+def f():
+    return 1

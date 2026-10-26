@@ -52,6 +52,7 @@ class PRComment:
         title: str,
         message: str,
         suggestion: str | None = None,
+        ai: bool = False,
     ):
         self.file_path = file_path
         self.line = line
@@ -59,6 +60,7 @@ class PRComment:
         self.title = title
         self.message = message
         self.suggestion = suggestion
+        self.ai = ai
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -70,6 +72,8 @@ class PRComment:
         }
         if self.suggestion:
             data["suggestion"] = self.suggestion
+        if self.ai:
+            data["ai"] = True  # never AI-adjudicated (`check --ai-adjudicate`)
         return data
 
 
@@ -411,6 +415,7 @@ def run_hybrid_review(
                     title=_clean_ai_text(str(item["title"]), 200),
                     message=_clean_ai_text(str(item["message"]), 2000),
                     suggestion=suggestion if is_valid_code_suggestion(suggestion) else None,
+                    ai=True,
                 )
             )
 

@@ -1,0 +1,31 @@
+-- label.yaml --
+category: fabrication
+description: "A Next.js route answers an upstream failure with canned rows."
+must_fire: [route-canned-fallback]
+must_not_fire: []
+-- base/app/api/rates/route.ts --
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  const res = await fetch(process.env.RATES_URL as string);
+  return NextResponse.json(await res.json());
+}
+-- base/.env.example --
+RATES_URL=
+-- base/package.json --
+{"name": "rates", "dependencies": {"next": "14.2.3"}}
+-- head/app/api/rates/route.ts --
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  try {
+    const res = await fetch(process.env.RATES_URL as string);
+    return NextResponse.json(await res.json());
+  } catch {
+    return NextResponse.json({ rates: [{ code: "EUR", rate: 1.08 }] });
+  }
+}
+-- head/.env.example --
+RATES_URL=
+-- head/package.json --
+{"name": "rates", "dependencies": {"next": "14.2.3"}}

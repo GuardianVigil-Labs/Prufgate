@@ -1,0 +1,26 @@
+-- label.yaml --
+category: weakened-test
+description: "A status assertion widened from 200 to '200 or 500'."
+must_fire: [diff-assertion-weakening]
+must_not_fire: []
+-- base/tests/test_health.py --
+from app.client import get_status
+
+
+def test_health_endpoint():
+    resp = get_status("/health")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+-- base/app/client.py --
+def get_status(path):
+    raise RuntimeError(path)
+-- head/tests/test_health.py --
+from app.client import get_status
+
+
+def test_health_endpoint():
+    resp = get_status("/health")
+    assert resp.status_code in (200, 500)
+-- head/app/client.py --
+def get_status(path):
+    raise RuntimeError(path)

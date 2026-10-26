@@ -1,0 +1,21 @@
+-- label.yaml --
+category: fabrication
+description: "A sign-up form whose submit only prevents the default."
+must_fire: [disconnected-form-submit]
+must_not_fire: []
+-- base/src/components/Signup.tsx --
+export function Signup({ register }: { register: (e: string) => void }) {
+  return <form onSubmit={(e) => { e.preventDefault(); register("x"); }}><input name="email" /></form>;
+}
+-- head/src/components/Signup.tsx --
+export function Signup({ register }: { register: (e: string) => void }) {
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+      }}
+    >
+      <input name="email" />
+    </form>
+  );
+}

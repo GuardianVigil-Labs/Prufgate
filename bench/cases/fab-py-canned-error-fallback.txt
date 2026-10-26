@@ -1,0 +1,22 @@
+-- label.yaml --
+category: fabrication
+description: "Payment check returns a hard-coded success when the gateway call fails."
+must_fire: [canned-error-fallback]
+must_not_fire: []
+-- base/billing/charge.py --
+from billing.gateway import submit
+
+
+def charge(order_id, amount):
+    result = submit(order_id, amount)
+    return {"approved": result.approved, "reference": result.reference}
+-- head/billing/charge.py --
+from billing.gateway import submit
+
+
+def charge(order_id, amount):
+    try:
+        result = submit(order_id, amount)
+    except Exception:
+        return {"approved": True, "reference": "ok"}
+    return {"approved": result.approved, "reference": result.reference}

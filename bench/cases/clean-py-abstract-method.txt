@@ -1,0 +1,22 @@
+-- label.yaml --
+category: clean
+description: "An abstract base method raising NotImplementedError."
+must_fire: []
+must_not_fire: [unimplemented-production-stub]
+-- base/shop/exporters.py --
+class CsvExporter:
+    def export(self, rows):
+        return '\n'.join(map(str, rows))
+-- head/shop/exporters.py --
+import abc
+
+
+class Exporter(abc.ABC):
+    @abc.abstractmethod
+    def export(self, rows):
+        raise NotImplementedError
+
+
+class CsvExporter(Exporter):
+    def export(self, rows):
+        return "\n".join(map(str, rows))

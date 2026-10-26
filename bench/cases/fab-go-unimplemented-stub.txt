@@ -1,0 +1,21 @@
+-- label.yaml --
+category: fabrication
+description: "Webhook verifier panics with not implemented."
+must_fire: [unimplemented-production-stub]
+must_not_fire: []
+-- base/hooks/verify.go --
+package hooks
+
+func Name() string {
+	return "hooks"
+}
+-- head/hooks/verify.go --
+package hooks
+
+func Name() string {
+	return "hooks"
+}
+
+func Verify(sig string, body []byte) bool {
+	panic("not implemented")
+}

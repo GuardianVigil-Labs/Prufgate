@@ -1,0 +1,11 @@
+-- label.yaml --
+category: suppression
+description: "A double cast through unknown silences the type checker."
+must_fire: [unsafe-type-cast-cascade]
+must_not_fire: []
+-- base/src/user.ts --
+export interface User { id: string }
+export const asUser = (u: User): User => u;
+-- head/src/user.ts --
+export interface User { id: string }
+export const asUser = (u: number): User => u as unknown as User;

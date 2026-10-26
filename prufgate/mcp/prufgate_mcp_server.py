@@ -91,7 +91,7 @@ def _run_json(cmd: List[str], ws: Path, out_flag: Optional[str] = None, stdout_j
     with tempfile.TemporaryDirectory(prefix="prufgate-mcp-") as tmp:
         out = Path(tmp) / "out.json"
         full = [sys.executable, *cmd] + ([f"{out_flag}={out}"] if out_flag else [])
-        env = dict(os.environ, WORKSPACE=str(ws), PRUFGATE_REPORTS_DIR=str(Path(tmp) / "reports"))
+        env = dict(os.environ, WORKSPACE=str(ws), PRUFGATE_REPORTS_DIR=str(Path(tmp) / "reports"), PRUFGATE_NO_AI_ADJUDICATE="1")
         try:
             proc = subprocess.run(
                 full, cwd=str(ws), env=env, capture_output=True, text=True,

@@ -1,0 +1,13 @@
+-- label.yaml --
+category: clean
+description: "A button handler that calls the save callback."
+must_fire: []
+must_not_fire: [stub-click-handler]
+-- base/src/components/SaveBar.tsx --
+export function SaveBar() {
+  return <button>Save</button>;
+}
+-- head/src/components/SaveBar.tsx --
+export function SaveBar({ onSave }: { onSave: (draft: boolean) => void }) {
+  return <button onClick={() => onSave(false)}>Save</button>;
+}

@@ -1,0 +1,11 @@
+-- label.yaml --
+category: clean
+description: "@ts-expect-error with a written reason."
+must_fire: []
+must_not_fire: [suppression-comment-smuggling]
+-- base/src/legacy.ts --
+export const read = (o: { a: number }) => o.a;
+-- head/src/legacy.ts --
+export const read = (o: { a: number }) => o.a;
+// @ts-expect-error -- the vendored widget types omit `size`, fixed upstream in a later release
+export const size = (w: { name: string }) => w.size;

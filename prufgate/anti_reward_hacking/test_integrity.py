@@ -308,8 +308,9 @@ def _infer_subject_stem(path: Path) -> str:
     return path.stem.lower()
 
 
-def _strip_comments_and_strings_Preserve_len(text: str) -> str:
-    """Replace contents of string literals and comments with spaces while keeping newlines and indices intact."""
+def _strip_comments_and_strings_Preserve_len(text: str, keep_strings: bool = False) -> str:
+    """Replace contents of string literals and comments with spaces while keeping newlines and indices intact.
+    With `keep_strings`, only comments are blanked; string literals are skipped over unchanged."""
     out = list(text)
     i = 0
     n = len(text)
@@ -344,24 +345,20 @@ def _strip_comments_and_strings_Preserve_len(text: str) -> str:
                 i += 1
         # Strings '...', "...", `...`
         elif ch in ("'", '"', "`"):
-            quote = ch
-            out[i] = " "
+            quote, start = ch, i
             i += 1
             while i < n:
                 if text[i] == "\\":
-                    if text[i] != "\n":
-                        out[i] = " "
-                    if i + 1 < n and text[i + 1] != "\n":
-                        out[i + 1] = " "
                     i += 2
                     continue
                 if text[i] == quote:
-                    out[i] = " "
                     i += 1
                     break
-                if text[i] != "\n":
-                    out[i] = " "
                 i += 1
+            if not keep_strings:
+                for j in range(start, min(i, n)):
+                    if text[j] != "\n":
+                        out[j] = " "
         else:
             i += 1
     return "".join(out)
@@ -1748,6 +1745,9 @@ def scan_diff_for_reward_hacking(
                     continue
 
                 for lit, (t_file, t_ln) in test_literals.items():
+                    # Dunder names (`__main__`, `__init__`) are language plumbing, not test input.
+                    if lit.startswith("__") and lit.endswith("__"):
+                        continue
                     escaped = re.escape(lit)
                     # Check if the production branch compares against this literal or matches it in a case/pattern
                     branch_match = re.search(

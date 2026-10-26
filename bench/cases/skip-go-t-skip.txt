@@ -1,0 +1,38 @@
+-- label.yaml --
+category: skipped-test
+description: "t.Skip() added at the top of a failing Go test."
+must_fire: [test-skip-smuggling]
+must_not_fire: []
+-- base/calc/mul.go --
+package calc
+
+func Mul(a, b int) int {
+	return a * b
+}
+-- base/calc/mul_test.go --
+package calc
+
+import "testing"
+
+func TestMul(t *testing.T) {
+	if Mul(2, 3) != 6 {
+		t.Fatal("2*3")
+	}
+}
+-- head/calc/mul.go --
+package calc
+
+func Mul(a, b int) int {
+	return a + b
+}
+-- head/calc/mul_test.go --
+package calc
+
+import "testing"
+
+func TestMul(t *testing.T) {
+	t.Skip()
+	if Mul(2, 3) != 6 {
+		t.Fatal("2*3")
+	}
+}

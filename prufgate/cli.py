@@ -2,14 +2,15 @@
 """PrufGate Unified CLI (`prufgate`).
 
 Subcommands:
-  - `prufgate check [path] [--changed] [--base REF] [--format text|json|sarif|gitlab|junit|agent-hook]`
+  - `prufgate check [path] [--changed] [--base REF] [--format text|json|sarif|gitlab|junit|agent-hook] [--ai-adjudicate]`
   - `prufgate test-audit [path] [--changed] [--format text|json]`
-  - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--static-only] [--base REF]`
+  - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--routes-from FILE] [--max-routes N] [--static-only] [--base REF]`
   - `prufgate review [--base REF] [--diff-file PATH] [--format markdown|json|sarif|github|reviewdog|gitlab|junit] [--ai]`
   - `prufgate verify --differential [path] [--base REF] [--test-cmd CMD] [--allow-run-tests]` (runs repository tests: opt-in only)
   - `prufgate init [path] [--hooks] [--agent NAME ...] [--agents-md] [--bugbot] [--overwrite]`
   - `prufgate shell-guard` (Claude Code PreToolUse hook: payload on stdin, exit 2 blocks)
   - `prufgate hook <agent> <event>` (fail-closed coding-agent hook adapters, docs/AGENT_HOOKS.md)
+  - `prufgate bench [--cases DIR] [--format text|json|markdown] [--rule RULE] [--min-precision X] [--min-recall Y]`
   - `prufgate mcp`
   - `prufgate api [--host 127.0.0.1] [--port 8000]`
   - `prufgate fast` / `prufgate full` (shortcuts for `check --changed` / `check`)
@@ -39,12 +40,19 @@ from prufgate import PROJECT_URL, __version__, inline_ignore  # noqa: E402
 from prufgate.anti_fabrication import detector as af_detector  # noqa: E402
 from prufgate.anti_reward_hacking import test_integrity as ti_engine  # noqa: E402
 from prufgate.bola import bola_engine  # noqa: E402
-from prufgate.config import ConfigError, PrufGateConfig, expand_rule_aliases, rules_match  # noqa: E402
+from prufgate.config import (  # noqa: E402
+    AiAdjudicate,
+    ConfigError,
+    PrufGateConfig,
+    expand_rule_aliases,
+    rules_match,
+)
 from prufgate.diff_guard import tamper_detector as dg_engine  # noqa: E402
 from prufgate.hooks.adapters import AGENTS, EVENTS  # noqa: E402
 from prufgate.hooks.agent_hooks import AGENT_CHOICES, HookConfigError, init_workspace  # noqa: E402
 from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.review import reviewer as rev_engine  # noqa: E402
+from prufgate.review.adjudicate import adjudicate as ai_adjudicate  # noqa: E402
 from prufgate.rules import SARIF_RANK, visible  # noqa: E402
 from prufgate.rules import confidence as rule_confidence  # noqa: E402
 from prufgate.sarif import add_partial_fingerprints  # noqa: E402
@@ -78,11 +86,17 @@ def _collect_unified_findings(
     base_ref: str | None = None,
     config_path: str | None = None,
     honoured: list[dict[str, Any]] | None = None,
+    ai_dismissed: list[dict[str, Any]] | None = None,
+    ai_provider: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run Engines 1-5 on `target_path` and return normalized finding dicts.
 
     A reasonless inline ignore is returned as an `ignore-without-reason` finding;
     the ignores the engines honoured are appended to `honoured` when it is given.
+
+    With `ai_dismissed` given, AI adjudication runs when `ai_provider` is set (the
+    `--ai-adjudicate` flag) or the configuration in effect turns it on; the findings
+    it dismisses move from the result to `ai_dismissed`.
 
     The engines read git and relative paths from the current directory, so the
     scan runs from the workspace root whatever directory `prufgate` was started in.
@@ -93,7 +107,9 @@ def _collect_unified_findings(
     os.chdir(workspace)
     try:
         with inline_ignore.recording() as records:
-            found = _collect_in_workspace(workspace, target_path, changed_only, base_ref, config_path)
+            found = _collect_in_workspace(
+                workspace, target_path, changed_only, base_ref, config_path, ai_dismissed, ai_provider
+            )
     finally:
         os.chdir(previous_cwd)
     for e in records:
@@ -192,13 +208,18 @@ def _collect_in_workspace(
     changed_only: bool,
     base_ref: str | None,
     config_path: str | None,
+    ai_dismissed: list[dict[str, Any]] | None = None,
+    ai_provider: str | None = None,
 ) -> list[dict[str, Any]]:
     if changed_only:
         base_ref = resolve_base_ref(base_ref)
     # With a base ref every engine applies the configuration at the base: the
     # branch's own edits take effect after merge. Engine 3 compares the two.
     head_cfg = PrufGateConfig.load(workspace, config_path)
-    cfg = PrufGateConfig.load(workspace, config_path, ref=base_ref) if base_ref else head_cfg
+    # A changed scan with no base compares the working tree with HEAD, so an
+    # uncommitted configuration edit does not apply to it either.
+    cfg_ref = base_ref or ("HEAD" if changed_only else None)
+    cfg = PrufGateConfig.load(workspace, config_path, ref=cfg_ref) if cfg_ref else head_cfg
 
     unified: list[dict[str, Any]] = []
 
@@ -287,7 +308,7 @@ def _collect_in_workspace(
     dg_findings = dg_engine.scan_diff_for_tampering(diff_for_dg, config=cfg) if diff_for_dg else []
     # Linter configs and the PrufGate configuration, compared by value with the base.
     dg_findings = dg_engine.with_linter_drift(dg_findings, diff_for_dg, workspace, base_ref, cfg)
-    dg_findings = dg_engine.with_config_drift(dg_findings, head_cfg, workspace, base_ref, config_path)
+    dg_findings = dg_engine.with_config_drift(dg_findings, head_cfg, workspace, cfg_ref, config_path)
     if dg_findings:
         for dgf in dg_findings:
             if not _is_internal(dg_engine, dgf.path):
@@ -376,7 +397,47 @@ def _collect_in_workspace(
             if f["rule"] == "prufgate-config-self-exemption"
             or not any(rules_match(str(f["rule"]), r) for r in cfg.known_debt_ceilings)
         ]
+    # After the debt ratchet, so a dismissal never lowers a known_debt count.
+    # AI adjudication only loosens the gate, so only the configuration in effect (read at
+    # the base ref) turns it on; `--ai-adjudicate` alone is a request, never enough.
+    adj = _trusted_adjudication(workspace, config_path, cfg, cfg_ref) if ai_dismissed is not None else cfg.ai_adjudicate
+    if ai_dismissed is not None and ai_provider is not None and not adj.enabled:
+        print(
+            "notice: --ai-adjudicate ignored: the configuration in effect does not enable `ai_adjudicate`; "
+            "running without AI.",
+            file=sys.stderr,
+        )
+    elif ai_dismissed is not None and adj.enabled:
+        provider = ai_provider or os.environ.get("PRUFGATE_AI_PROVIDER") or "auto"
+        verdicts, note = ai_adjudicate(
+            [(str(f["rule"]), str(f["file"]), int(f["line"]), str(f["message"]), str(f.get("engine") or ""))
+             for f in deduped],
+            workspace,
+            adj,
+            provider=provider,
+        )
+        print(f"notice: {note}", file=sys.stderr)
+        for i, reason in verdicts.items():
+            ai_dismissed.append({**deduped[i], "kind": "ai-dismissed", "reason": reason})
+        deduped = [f for i, f in enumerate(deduped) if i not in verdicts]
     return deduped
+
+
+def _trusted_adjudication(workspace: Path, config_path: str | None, cfg: PrufGateConfig, cfg_ref: str | None) -> AiAdjudicate:
+    """The `ai_adjudicate` settings a run may use. A full scan with no base applies the
+    working tree's configuration, but adjudication only loosens the gate: in a git
+    repository it must also be on where a changed scan would read it (the base, else HEAD)."""
+    if cfg_ref is not None or _commit("HEAD") is None or not cfg.ai_adjudicate.enabled:
+        return cfg.ai_adjudicate
+    try:
+        ref = resolve_base_ref() or "HEAD"
+    except BaseRefError:
+        ref = "HEAD"
+    try:
+        trusted = PrufGateConfig.load(workspace, config_path, ref=ref).ai_adjudicate
+    except ConfigError:
+        return AiAdjudicate()
+    return trusted if trusted.enabled else AiAdjudicate()
 
 
 def _format_sarif_findings(
@@ -419,6 +480,8 @@ def _sarif_findings_doc(
         )
         if f.get("kind") == "honoured":
             results[-1]["suppressions"] = [{"kind": "inSource", "justification": str(f.get("reason", ""))}]
+        elif f.get("kind") == "ai-dismissed":
+            results[-1]["suppressions"] = [{"kind": "external", "justification": f"AI-dismissed: {f.get('reason', '')}"}]
     add_partial_fingerprints(results, root)
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -469,6 +532,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         return 2
 
     honoured: list[dict[str, Any]] = []
+    dismissed: list[dict[str, Any]] = []
     try:
         findings = _collect_unified_findings(
             target,
@@ -476,6 +540,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
             base_ref=args.base,
             config_path=args.config,
             honoured=honoured,
+            # The agent hooks (and the MCP server and REST API, which set the variable)
+            # never call AI adjudication: an agent must not get a judge to iterate against.
+            ai_dismissed=None if args.format == "agent-hook" or os.environ.get("PRUFGATE_NO_AI_ADJUDICATE") else dismissed,
+            ai_provider=(args.ai_provider or os.environ.get("PRUFGATE_AI_PROVIDER") or "auto") if args.ai_adjudicate else None,
         )
     except (ConfigError, af_detector.SettingsError) as exc:
         print(f"prufgate check: {exc}", file=sys.stderr)
@@ -494,9 +562,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
         print(json.dumps(findings, indent=2))
     elif args.format == "sarif":
         # Finding paths are relative to the scanned directory, or to the file's directory for one file.
-        print(_format_sarif_findings(findings, target if target.is_dir() else target.parent, honoured))
+        print(_format_sarif_findings(findings, target if target.is_dir() else target.parent, honoured + dismissed))
     elif args.format in ("gitlab", "junit"):
-        doc = _sarif_findings_doc(findings, target if target.is_dir() else target.parent, honoured)
+        doc = _sarif_findings_doc(findings, target if target.is_dir() else target.parent, honoured + dismissed)
         print(gitlab_code_quality(doc) if args.format == "gitlab" else junit_xml(doc))
     elif args.format == "agent-hook":
         if blockers:
@@ -520,6 +588,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
             print(f"{len(honoured)} finding(s) suppressed by an inline prufgate-ignore:")
             for e in honoured:
                 print(f"  [{e['engine']}:{e['rule']}] {e['file']}:{e['line']} — {e['reason']}")
+        if dismissed:
+            print(f"AI-dismissed: {len(dismissed)} finding(s) an AI judged not real (not blocking):")
+            for e in dismissed:
+                print(f"  [{e['severity']}] [{e['engine']}:{e['rule']}] {e['file']}:{e['line']} — AI: {e['reason']}")
         if not findings:
             print("✔ PrufGate check passed: 0 findings across Engines 1-5.")
             return 0
@@ -569,12 +641,40 @@ def _cmd_bola(args: argparse.Namespace) -> int:
         ws = Path(args.path).resolve()
         cfg = PrufGateConfig.load(ws, args.config, ref=args.base)
         findings: list[bola_engine.BolaFinding] = []
+        extra_paths: list[str] = []
+        if args.max_routes < 0:
+            print("prufgate bola: --max-routes must be 0 or more", file=sys.stderr)
+            return 2
+        if args.routes_from:
+            from prufgate.bola.route_sources import RouteSourceError, load_route_paths
+
+            skipped = 0
+            try:
+                for route_file in args.routes_from:
+                    paths, n_skipped = load_route_paths(route_file)
+                    extra_paths += paths
+                    skipped += n_skipped
+            except RouteSourceError as exc:
+                print(f"prufgate bola: {exc}", file=sys.stderr)
+                return 2
+            print(
+                f"prufgate bola: --routes-from read {len(extra_paths)} GET/HEAD path(s), skipped {skipped} other-method entr(ies).",
+                file=sys.stderr,
+            )
         if not args.static_only and args.url:
+            from prufgate.netguard import target_url_error
+
+            url_error = target_url_error(args.url)
+            if url_error:
+                print(f"prufgate bola: {url_error}", file=sys.stderr)
+                return 2
             if not bola_engine.check_server_active(args.url):
                 print(f"prufgate bola: {args.url} is not reachable; the live probe did not run.", file=sys.stderr)
                 return 2
             with redirect_stdout(sys.stderr):
-                findings.extend(bola_engine.run_dynamic_matrix(args.url, workspace=ws, config=cfg))
+                findings.extend(bola_engine.run_dynamic_matrix(
+                    args.url, workspace=ws, config=cfg, extra_paths=extra_paths, max_extra_paths=args.max_routes,
+                ))
         if ws.exists():
             with redirect_stdout(io.StringIO()):
                 findings.extend(bola_engine.run_static_matrix_audit(ws, config=cfg))
@@ -713,6 +813,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="prufgate",
         description="PrufGate — checks code for fabricated logic, hollow tests, guardrail tampering and BOLA.",
         epilog="Exit codes: 0 clean, 1 blocking findings (P0/P1), 2 usage, configuration or engine error.",
+        allow_abbrev=False,
     )
     parser.add_argument("--self-check", action="store_true", help="Run built-in fixture verification across all engines")
     parser.add_argument("--version", action="version", version=f"prufgate {__version__}")
@@ -729,6 +830,18 @@ def main(argv: list[str] | None = None) -> int:
         choices=("text", "json", "sarif", "gitlab", "junit", "agent-hook"),
         default="text",
         help="Output format (default: text)",
+    )
+    p_check.add_argument(
+        "--ai-adjudicate",
+        action="store_true",
+        help="Ask an AI provider whether each low-confidence finding is real; a 'no' moves it to an AI-dismissed list. "
+        "Takes effect only when the configuration in effect (at the base ref) enables ai_adjudicate",
+    )
+    p_check.add_argument(
+        "--ai-provider",
+        default=None,
+        help="Provider for AI adjudication (auto, claude, opencode, codex, gemini, openai, anthropic, ollama; "
+        "default PRUFGATE_AI_PROVIDER or auto)",
     )
 
     # 2. prufgate test-audit
@@ -751,6 +864,11 @@ def main(argv: list[str] | None = None) -> int:
     p_bola.add_argument("--config", default=None, help="Path to .prufgate/config.yaml")
     p_bola.add_argument("--base", default=None, help="Read the PrufGate configuration as it is at this base ref (changed-files runs)")
     p_bola.add_argument("--format", choices=("text", "json"), default="text")
+    p_bola.add_argument(
+        "--routes-from", action="append", default=[], metavar="FILE",
+        help="Extra GET/HEAD route paths from an OpenAPI/Swagger, Postman v2.1 or HAR file (repeatable); probed on --url only",
+    )
+    p_bola.add_argument("--max-routes", type=int, default=200, help="Cap on extra paths from --routes-from (default 200)")
 
     # 4. prufgate review
     p_rev = subparsers.add_parser("review", help="Run deterministic + optional BYO-AI PR diff review (Engine 6)")
@@ -811,6 +929,14 @@ def main(argv: list[str] | None = None) -> int:
     p_hook.add_argument("agent", choices=AGENTS)
     p_hook.add_argument("event", choices=EVENTS, help="pre-tool (shell/edit guard), shell (Cursor beforeShellExecution), stop")
 
+    # 5d. prufgate bench
+    p_bench = subparsers.add_parser("bench", help="Measure precision and recall of `check --changed` on a labelled corpus")
+    p_bench.add_argument("--cases", default=None, help="Corpus directory (default: bench/cases, from a checkout)")
+    p_bench.add_argument("--format", choices=("text", "json", "markdown"), default="text")
+    p_bench.add_argument("--rule", default=None, help="Score this rule only")
+    p_bench.add_argument("--min-precision", type=float, default=None, help="Exit 1 when overall precision is below this")
+    p_bench.add_argument("--min-recall", type=float, default=None, help="Exit 1 when overall recall is below this")
+
     # 6. prufgate mcp
     subparsers.add_parser("mcp", help="Start PrufGate Model Context Protocol (MCP) stdio server")
 
@@ -819,6 +945,9 @@ def main(argv: list[str] | None = None) -> int:
     p_api.add_argument("--host", default=os.environ.get("PRUFGATE_API_HOST", "127.0.0.1"))
     p_api.add_argument("--port", type=int, default=8000)
 
+    # No abbreviated options: `--ai-adj` must not slip past the check for `--ai-adjudicate`.
+    for sub in subparsers.choices.values():
+        sub.allow_abbrev = False
     args = parser.parse_args(raw_args)
 
     if args.subcommand == "check":
@@ -857,6 +986,10 @@ def main(argv: list[str] | None = None) -> int:
         from prufgate.hooks.adapters import main as hook_main
 
         return hook_main(args.agent, args.event)
+    if args.subcommand == "bench":
+        from prufgate.bench import main as bench_main
+
+        return bench_main(args.cases, args.format, args.rule, args.min_precision, args.min_recall)
     if args.subcommand == "mcp":
         from prufgate.mcp.prufgate_mcp_server import main as mcp_main
 

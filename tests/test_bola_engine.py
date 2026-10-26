@@ -198,5 +198,31 @@ class TestUniversalBolaEngine(unittest.TestCase):
                 httpd.shutdown()
 
 
+class TestUnsafeTargetRefused(unittest.TestCase):
+    """The link-local / metadata guard holds when the engine is run directly, not only via the CLI."""
+
+    def test_direct_run_and_probe_refuse_metadata_target(self) -> None:
+        import subprocess
+        import sys
+        from unittest import mock
+
+        from prufgate.bola import bola_engine
+
+        env = {k: v for k, v in os.environ.items() if k != "PRUFGATE_ALLOW_LINK_LOCAL"}
+        engine = Path(bola_engine.__file__)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env, clear=True):
+            for target in ("http://169.254.169.254/", "http://metadata.google.internal/"):
+                with self.subTest(target):
+                    run = subprocess.run(
+                        [sys.executable, str(engine), "--target", target, "--workspace", tmp],
+                        capture_output=True, text=True, env=env, timeout=60,
+                    )
+                    self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+                    self.assertIn("Blocked SSRF target", run.stderr)
+                    self.assertFalse(bola_engine.check_server_active(target))
+                    with self.assertRaises(ValueError):
+                        bola_engine.run_dynamic_matrix(target)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,18 @@
+-- label.yaml --
+category: clean
+description: "tsconfig enables noUncheckedIndexedAccess."
+must_fire: []
+must_not_fire: [linter-or-ci-config-weakening]
+-- base/tsconfig.json --
+{
+  "compilerOptions": {
+    "strict": true
+  }
+}
+-- head/tsconfig.json --
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true
+  }
+}
