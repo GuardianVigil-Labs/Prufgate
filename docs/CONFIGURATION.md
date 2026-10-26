@@ -87,7 +87,7 @@ return cachedPrices; // prufgate-ignore: route-canned-fallback -- served from th
 
 - Name one or more rules, separated by commas (`prufgate-ignore: rule-a, rule-b -- reason`), or none to cover every rule on that line (`prufgate-ignore -- reason`). Engine 6 rules use the ID the report shows, for example `pr-disabled-tls-certificate-verification`.
 - **The reason is required.** Write it after `--` (the older ` - ` separator is still read). An ignore without a reason suppresses nothing: the finding stays, and the report adds an `ignore-without-reason` finding (P2) on that line telling you to add one.
-- **Every honoured ignore is reported.** The Markdown report counts them in its summary and lists each with its reason under "Inline Ignores"; the SARIF report keeps each as a result with an in-source `suppressions` entry and the reason as its `justification`, which GitHub code scanning shows as a dismissed alert. `prufgate check` prints them before its findings, and adds them the same way to `--format sarif`.
+- **Every honoured ignore is reported.** The Markdown report counts them in its summary and lists each with its reason under "Inline Ignores"; the SARIF report keeps each as a result with an in-source `suppressions` entry and the reason as its `justification`, which GitHub code scanning shows as a dismissed alert. `prufgate check` prints them before its findings, and adds them the same way to `--format sarif`. The GitLab Code Quality and JUnit reports leave honoured ignores out.
 
 Engine 3 also flags a new `prufgate-ignore` added in a diff without a justification, like any other bare suppression.
 
@@ -141,6 +141,7 @@ Engine 3 reports a diff that adds a new exemption, debt entry or score owner to 
 | `PRUFGATE_TEST_PROBE_TOKEN_A`, `_B` | engine 5 | Bearer tokens for live probing. |
 | `PRUFGATE_TEST_PROBE_TENANT_A_ID`, `_B_ID` | engine 5 | Tenant IDs for live probing. |
 | `PRUFGATE_ALLOW_REPO_HOOKS` | gate | `1` runs the scanned repository's `.prufgate/hooks/` scripts. Off by default: they are code from the repository under review. |
+| `PRUFGATE_ALLOW_RUN_TESTS` | `verify` | `1` lets `prufgate verify --differential` run the repository's tests, as `--allow-run-tests` does. Off by default: the tests are code from the repository under review. Set it only in a sandbox or disposable CI job. |
 | `PRUFGATE_INFO_URI` | reports | The `informationUri` written into SARIF. |
 | `PRUFGATE_AI_MODEL` | engine 6 | Model name for `--ai` with an API provider. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST` | engine 6 | Providers for `prufgate review --ai`. Never written to output. |

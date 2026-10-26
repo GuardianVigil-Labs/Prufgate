@@ -7,7 +7,8 @@ Detects:
   missing from workspace dependency manifests.
 - `undocumented-env-var-drift` (`P1`): Environment variables referenced in code (`process.env.X`,
   `import.meta.env.X`, `os.environ["X"]`, `os.getenv("X")`, `os.Getenv("X")`, `std::env::var("X")`,
-  `env!("X")`) that are missing from `.env.example` / `.env.template` / `.env.sample`.
+  `env!("X")`) that are missing from `.env.example` / `.env.template` / `.env.sample` and from
+  config schemas and deploy manifests (zod, pydantic-settings, compose, Kubernetes, Helm, Actions).
 - `frontend-backend-route-mismatch` (`P1`): Frontend HTTP client calls (`fetch("/api/...")`,
   `axios.<method>("/api/...")`, `useSWR("/api/...")`) targeting `/api/...` routes or HTTP methods
   that do not exist in backend route handlers or OpenAPI specifications.
@@ -112,7 +113,7 @@ def scan_contract_guard(
     """Run Ghost Dependency, Env Drift, and API Route Contract checks across `workspace`."""
     cfg = config or (PrufGateConfig.load(workspace, ref=base) if base or (workspace / ".prufgate").exists() else PrufGateConfig())
     manifests: WorkspaceManifests = load_declared_dependencies(workspace)
-    documented_env: set[str] | None = load_documented_env_vars(workspace)
+    documented_env: set[str] | None = load_documented_env_vars(workspace, cfg)
     api_index = build_backend_api_index(workspace)
 
     findings: list[Finding] = []

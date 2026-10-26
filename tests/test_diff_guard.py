@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from prufgate.config import PrufGateConfig
+from prufgate.diff_guard import linter_drift
 from prufgate.diff_guard.tamper_detector import (
     main,
     parse_unified_diff,
     run_self_check,
     scan_diff_for_tampering,
+    with_linter_drift,
 )
 from prufgate.synthesizer.parse_results import parse_raw_results
 
@@ -359,6 +362,517 @@ class TestFakeExit(unittest.TestCase):
     def test_exemption_applies(self) -> None:
         cfg = PrufGateConfig(exempt={("tests/conftest.py", "test-fake-exit"): "documented smoke harness"})
         self.assertEqual(self._rules(self._diff("tests/conftest.py", "sys.exit(0)"), cfg), [])
+
+
+class TestHarnessEdits(unittest.TestCase):
+    """Edits to the test runner, assertions, conftest hooks, test config or test command."""
+
+    _diff = staticmethod(TestFakeExit._diff)
+
+    def _rules(self, diff_text: str, cfg: PrufGateConfig | None = None) -> list[str]:
+        return [f.rule for f in scan_diff_for_tampering(diff_text, config=cfg)]
+
+    FLAGGED = (
+        ("tests/conftest.py", ["import unittest","unittest.TestCase.assertEqual = lambda *a, **k: None"]),
+        ("tests/conftest.py", ["from unittest import TestCase","TestCase.assertTrue = lambda *a: None"]),
+        ("tests/conftest.py", ["import pytest","pytest.approx = lambda v, **k: v"]),
+        ("tests/conftest.py", ["import builtins","builtins.isinstance = lambda *a: True"]),
+        ("tests/conftest.py", ["sys.modules['pytest'] = object()"]),
+        ("tests/conftest.py", ["import unittest","setattr(unittest.TestCase, 'assertIn', lambda *a: None)"]),
+        ("tests/helpers.py", ["class Base(unittest.TestCase):","    def assertEqual(self, a, b):","        pass"]),
+        ("src/money.py", ["class Money:","    def __eq__(self, other):","        return True"]),
+        ("src/money.py", ["class Money:","    __ne__ = lambda self, other: False"]),
+        ("tests/conftest.py", ["def pytest_runtest_makereport(item, call):","    rep = call","    rep.outcome = 'passed'"]),
+        ("tests/conftest.py", ["def pytest_sessionfinish(session, exitstatus):","    session.exitstatus = 0"]),
+        ("tests/conftest.py", ["def pytest_terminal_summary(terminalreporter):","    terminalreporter.stats.pop('failed', None)"]),
+        ("tests/conftest.py", ["def pytest_pyfunc_call(pyfuncitem):","    return True"]),
+        ("tests/conftest.py", ["def pytest_collection_modifyitems(config, items):","    items[:] = [i for i in items if 'billing' not in i.nodeid]"]),
+        ("tests/conftest.py", ["def pytest_collection_modifyitems(session, config, items):","    items.clear()"]),
+        ("tests/conftest.py", ["def pytest_ignore_collect(collection_path, config):","    return True"]),
+        ("jest.setup.js", ["global.expect = () => ({ toBe() {}, toEqual() {} });"]),
+        ("vitest.setup.ts", ["expect.extend({","  toEqual() {","    return { pass: true, message: () => '' };","  },","});"]),
+        ("jest.config.js", ["  passWithNoTests: true,"]),
+        ("jest.config.js", ["  testPathIgnorePatterns: ['/node_modules/', '/tests/'],"]),
+        ("vitest.config.ts", ["    exclude: [","      '**/*.test.ts',","    ],"]),
+        ("jest.config.js", ["  testMatch: [],"]),
+        ("jest.config.js", ["  silent: true,","  forceExit: true,"]),
+        ("pyproject.toml", ['addopts = "-ra --deselect tests/test_billing.py::test_refund"']),
+        ("pytest.ini", ["addopts = --ignore=tests/integration"]),
+        ("package.json", ['    "test": "exit 0",']),
+        ("package.json", ['    "test": "jest || true",']),
+        ("package.json", ['    "test": "echo ok",']),
+        ("Makefile", ["test:","\t@true"]),
+        ("Makefile", ["test:","\t-pytest"]),
+        ("Makefile", ["check:","\tpytest || true"]),
+        ("tox.ini", ["commands = - pytest"]),
+        ("noxfile.py", ["    session.run('pytest', success_codes=[0, 1])"]),
+    )
+
+    NEAR_MISSES = (
+        ("tests/conftest.py", ["import unittest","unittest.TestCase.maxDiff = None"]),
+        ("tests/test_x.py", ["import pytest","def test_x():","    assert 0.1 + 0.2 == pytest.approx(0.3)"]),
+        ("tests/test_x.py", ["def test_x(monkeypatch):","    monkeypatch.setattr(app.config, 'debug', True)"]),
+        ("tests/helpers.py", ["class Base(unittest.TestCase):","    def assertValidOrder(self, o):","        self.assertEqual(o.total, 3)"]),
+        ("src/money.py", ["class Money:","    def __eq__(self, other):","        return self.amount == other.amount"]),
+        ("tests/helpers.py", ["class AnyString:","    def __eq__(self, other):","        return True"]),
+        ("src/money.py", ["class Money:","    def __ne__(self, other):","        return not self == other"]),
+        ("tests/conftest.py", ["def pytest_runtest_makereport(item, call):","    if call.excinfo:","        item.failed = True"]),
+        ("tests/conftest.py", ["def pytest_collection_modifyitems(config, items):","    items.sort(key=lambda i: i.nodeid)","    for item in items:","        item.add_marker('slow')"]),
+        ("tests/conftest.py", ["def pytest_ignore_collect(collection_path, config):","    return collection_path.name == 'legacy'"]),
+        ("tests/conftest.py", ["def pytest_sessionfinish(session, exitstatus):","    print(session.exitstatus)"]),
+        ("vitest.setup.ts", ["expect.extend({","  toBeCents(received) {","    return { pass: Number.isInteger(received), message: () => '' };","  },","});"]),
+        ("tests/setup.js", ["const expect = require('chai').expect;"]),
+        ("jest.config.js", ["  passWithNoTests: false,"]),
+        ("jest.config.js", ["  testPathIgnorePatterns: ['/node_modules/', '/dist/'],"]),
+        ("vitest.config.ts", ["    exclude: [...configDefaults.exclude, 'e2e/**'],"]),
+        ("jest.config.js", ["  silent: true,"]),
+        ("pyproject.toml", ['addopts = "-ra --strict-markers"']),
+        ("package.json", ['    "test": "echo \\"Error: no test specified\\" && exit 1",']),
+        ("package.json", ['    "test": "vitest run",']),
+        ("package.json", ['    "lint": "eslint . || true",']),
+        ("Makefile", ["test:","\t$(PYTHON) -m pytest"]),
+        ("Makefile", ["clean:","\t-rm -rf build"]),
+        ("tox.ini", ["commands = pytest {posargs}"]),
+        ("noxfile.py", ["    session.run('pytest', success_codes=[0, 5])"]),
+        ("src/cli.ts", ["global.expect = 1;"]),
+        # Every object is truthy already; `__bool__` returning True changes nothing.
+        ("src/money.py", ["class Result:","    def __bool__(self):","        return True"]),
+    )
+
+    def test_harness_edits_are_flagged(self) -> None:
+        for path, lines in self.FLAGGED:
+            with self.subTest(path=path, lines=lines):
+                self.assertTrue(self._rules(self._diff(path, *lines)))
+
+    def test_near_misses_are_not_flagged(self) -> None:
+        for path, lines in self.NEAR_MISSES:
+            with self.subTest(path=path, lines=lines):
+                self.assertEqual(self._rules(self._diff(path, *lines)), [])
+
+    def test_severity_and_rule_per_kind(self) -> None:
+        for (path, lines), rule, severity in (
+            (("src/money.py", ["class Money:", "    def __eq__(self, other):", "        return True"]), "always-true-equality", "P1"),
+            (("package.json", ['    "test": "exit 0",']), "test-script-neutered", "P0"),
+            (("tests/conftest.py", ["def pytest_collection_modifyitems(config, items):", "    items.clear()"]), "pytest-collection-deselect", "P1"),
+        ):
+            with self.subTest(rule=rule):
+                found = scan_diff_for_tampering(self._diff(path, *lines))
+                self.assertEqual([(f.rule, f.severity) for f in found], [(rule, severity)])
+
+    def test_hunk_inside_a_hook_uses_the_function_header(self) -> None:
+        diff_text = (
+            "diff --git a/tests/conftest.py b/tests/conftest.py\n--- a/tests/conftest.py\n+++ b/tests/conftest.py\n"
+            "@@ -8,2 +8,3 @@ def pytest_runtest_makereport(item, call):\n"
+            "     report = outcome.get_result()\n+    report.outcome = \"passed\"\n     return report\n"
+        )
+        self.assertEqual(self._rules(diff_text), ["pytest-result-rewrite"])
+
+    def test_only_added_lines_are_flagged(self) -> None:
+        diff_text = (
+            "diff --git a/src/money.py b/src/money.py\n--- a/src/money.py\n+++ b/src/money.py\n"
+            "@@ -1,3 +1,4 @@\n class Money:\n     def __eq__(self, other):\n         return True\n+    currency = \"EUR\"\n"
+        )
+        self.assertEqual(self._rules(diff_text), [])
+
+    def test_exemption_applies(self) -> None:
+        cfg = PrufGateConfig(exempt={("package.json", "test-script-neutered"): "#12: placeholder package"})
+        self.assertEqual(self._rules(self._diff("package.json", '    "test": "exit 0",'), cfg), [])
+
+
+NEEDS_TOML = unittest.skipIf(linter_drift.tomllib is None, "tomllib needs Python 3.11+; TOML keeps the line-based check")
+
+
+class TestLinterDriftByValue(unittest.TestCase):
+    """Linter configs compared by value: every weakening kind per format, and the near misses."""
+
+    def _whys(self, name: str, base: str | None, head: str) -> str:
+        got = linter_drift.compare(name, base, head)
+        self.assertIsNotNone(got)
+        return " | ".join(w for w, _, _ in got)
+
+    def assertFlags(self, name: str, base: str | None, head: str, *entries: str) -> None:
+        whys = self._whys(name, base, head)
+        self.assertTrue(whys, f"{name}: nothing flagged")
+        for e in entries:
+            self.assertIn(e, whys)
+
+    def assertClean(self, name: str, base: str | None, head: str) -> None:
+        self.assertEqual(self._whys(name, base, head), "")
+
+    @NEEDS_TOML
+    def test_ruff_toml_weakenings(self) -> None:
+        cases = [
+            ('[lint.per-file-ignores]\n"tests/*" = ["S101"]\n', '[lint.per-file-ignores]\n"tests/*" = ["S101", "S314"]\n', "S314"),
+            ("[lint.per-file-ignores]\n", '[lint.per-file-ignores]\n"src/*" = ["S"]\n', "src/*"),
+            ('[lint]\nignore = [\n    "E402",\n]\n', '[lint]\nignore = [\n    "E402",\n    "E501",\n]\n', "E501"),
+            ("[lint]\n", '[lint]\nextend-ignore = ["B"]\n', "B"),
+            ("", 'exclude = ["src/legacy"]\n', "src/legacy"),
+            ('extend-exclude = ["a"]\n', 'extend-exclude = ["a", "app"]\n', "app"),
+            ("[lint]\n", '[lint.extend-per-file-ignores]\n"x.py" = ["F401"]\n', "x.py"),
+            ('[lint]\nselect = ["E", "S", "B"]\n', '[lint]\nselect = ["E"]\n', "removes S, B"),
+        ]
+        for name in ("ruff.toml", ".ruff.toml"):
+            for base, head, entry in cases:
+                with self.subTest(name=name, head=head):
+                    self.assertFlags(name, base, head, entry)
+
+    @NEEDS_TOML
+    def test_pyproject_ruff_and_mypy(self) -> None:
+        self.assertFlags("pyproject.toml", '[tool.ruff.lint]\nignore = []\n', '[tool.ruff.lint]\nignore = ["S608"]\n', "S608")
+        self.assertFlags(
+            "pyproject.toml",
+            '[[tool.mypy.overrides]]\nmodule = "app.*"\nwarn_unused_ignores = true\n',
+            '[[tool.mypy.overrides]]\nmodule = "app.*"\nwarn_unused_ignores = true\nignore_errors = true\n',
+            "ignore_errors",
+        )
+        self.assertFlags("pyproject.toml", "[tool.mypy]\nstrict = true\n", "[tool.mypy]\nstrict = false\n", "strict")
+        self.assertFlags("pyproject.toml", "[tool.mypy]\nstrict = true\n", "[tool.mypy]\n", "removed")
+        # Sections other tools own are not linter settings.
+        self.assertClean("pyproject.toml", "[tool.pytest.ini_options]\n", '[tool.pytest.ini_options]\nfilterwarnings = ["ignore"]\n')
+
+    def test_tsconfig_jsonc(self) -> None:
+        base = '{\n  // comment "with quotes"\n  "compilerOptions": {"strict": true, "outDir": "dist//x",},\n  /* block */ "exclude": ["dist"],\n}\n'
+        self.assertFlags("tsconfig.json", base, base.replace('"strict": true', '"strict": false'), "strict")
+        self.assertFlags("tsconfig.json", base, base.replace('["dist"]', '["dist", "src/legacy"]'), "src/legacy")
+        self.assertFlags("tsconfig.app.json", '{"exclude": []}', '{"exclude": ["tests"]}', "tests")
+        got = linter_drift.compare("tsconfig.json", '{"compilerOptions": {}}', '{"compilerOptions": {"skipLibCheck": true}}')
+        self.assertEqual([(w.split()[0], sev) for w, _, sev in got], [("`compilerOptions.skipLibCheck`", "P2")])
+        # Near misses: build output excluded, strictness raised, string text that looks like a comment.
+        self.assertClean("tsconfig.json", base, base.replace('["dist"]', '["dist", "coverage"]'))
+        self.assertClean("tsconfig.json", base.replace('"strict": true', '"strict": false'), base)
+        self.assertClean("tsconfig.json", base, base.replace("dist//x", "dist//y"))
+
+    def test_biome(self) -> None:
+        self.assertFlags("biome.json", '{"files": {}}', '{"files": {"ignore": ["src/**"]}}', "src/**")
+        self.assertFlags("biome.json", '{"linter": {"rules": {"recommended": true}}}', '{"linter": {"rules": {"recommended": false}}}', "recommended")
+        self.assertFlags("biome.jsonc", '{"linter": {"rules": {"style": {"noVar": "error"}}}}', '{"linter": {"rules": {"style": {"noVar": "off"}}}}', "noVar")
+        self.assertClean("biome.json", '{"files": {"ignore": ["src/**"]}}', '{"files": {"ignore": []}}')
+
+    def test_eslint_json_and_yaml(self) -> None:
+        self.assertFlags(".eslintrc.json", '{"ignorePatterns": []}', '{"ignorePatterns": ["src/api/**"]}', "src/api/**")
+        self.assertFlags(
+            ".eslintrc.json",
+            '{"rules": {"no-eval": "error"}, "overrides": [{"files": ["*.ts"], "rules": {}}]}',
+            '{"rules": {"no-eval": "error"}, "overrides": [{"files": ["*.ts"], "rules": {"no-eval": ["off"]}}]}',
+            "no-eval",
+        )
+        self.assertFlags(".eslintrc.yml", "rules:\n  eqeqeq: error\n", "rules:\n  eqeqeq: 0\n", "eqeqeq")
+        self.assertFlags(".eslintrc", '{"rules": {}}', 'rules:\n  no-console: "off"\n', "no-console")
+        self.assertClean(".eslintrc.json", '{"rules": {"no-eval": "off"}}', '{"rules": {"no-eval": "error"}}')
+
+    def test_golangci(self) -> None:
+        base = "linters:\n  enable: [gosec, errcheck]\nissues:\n  exclude-rules: []\n"
+        self.assertFlags(".golangci.yml", base, base.replace("[gosec, errcheck]", "[errcheck]"), "removes gosec")
+        self.assertFlags(".golangci.yml", base, base + "  exclude-dirs: [internal]\n", "internal")
+        self.assertFlags(".golangci.yaml", base, base.replace("exclude-rules: []", "exclude-rules:\n    - linters: [gosec]\n      path: api/"), "gosec")
+        self.assertFlags(".golangci.yml", base, base.replace("linters:\n", "linters:\n  disable: [govet]\n"), "govet")
+        self.assertFlags(".golangci.yml", "version: '2'\nlinters:\n  exclusions:\n    paths: []\n",
+                         "version: '2'\nlinters:\n  exclusions:\n    paths: [gen/]\n", "gen/")
+        self.assertClean(".golangci.yml", base, base.replace("[gosec, errcheck]", "[gosec, errcheck, govet]"))
+
+    def test_new_file_is_compared_with_empty(self) -> None:
+        self.assertFlags("biome.json", None, '{"files": {"ignore": ["lib/**"]}}', "lib/**")
+        self.assertClean(".eslintrc.json", None, '{"rules": {"no-eval": "error"}}')
+
+    def test_unparseable_returns_none(self) -> None:
+        self.assertIsNone(linter_drift.compare("tsconfig.json", '{"a": 1}', '{"a": '))
+        self.assertIsNone(linter_drift.compare(".golangci.yml", "a: [", "a: 1\n"))
+        self.assertIsNone(linter_drift.compare("setup.cfg", "", "[flake8]\nignore = E501\n"))
+
+
+class TestHarnessEditsReview(unittest.TestCase):
+    """Evasions and false positives found in review: each evasion must be flagged,
+    each near miss must stay quiet."""
+
+    _diff = staticmethod(TestFakeExit._diff)
+
+    def _rules(self, diff_text: str) -> list[str]:
+        return [f.rule for f in scan_diff_for_tampering(diff_text)]
+
+    EVASIONS = (
+        # collection config in a conftest
+        ("tests/conftest.py", ["collect_ignore = ['test_add.py']"], "pytest-collection-deselect"),
+        ("tests/sub/conftest.py", ["collect_ignore_glob = ['*_auth.py']"], "pytest-collection-deselect"),
+        ("conftest.py", ["collect_ignore = ['tests/test_auth.py']"], "pytest-collection-deselect"),
+        ("tests/conftest.py", ["collect_ignore.append('billing')"], "pytest-collection-deselect"),
+        ("tests/conftest.py", ["import pytest", "def pytest_collection_modifyitems(config, items):", "    for i in items:",
+                               "        i.add_marker(pytest.mark.skip)"], "pytest-collection-deselect"),
+        ("tests/conftest.py", ["import pytest", "def pytest_collection_modifyitems(items):", "    for i in items:",
+                               "        i.add_marker(pytest.mark.xfail(reason='x'))"], "pytest-collection-deselect"),
+        ("tests/conftest.py", ["def pytest_ignore_collect(collection_path, config):", "    return 'test' in str(collection_path)"],
+         "pytest-collection-deselect"),
+        ("tests/conftest.py", ["def pytest_collection_modifyitems(items, config):", "    items.clear()"], "pytest-collection-deselect"),
+        ("tests/conftest.py", ["def pytest_collection_modifyitems(*, items):", "    items.clear()"], "pytest-collection-deselect"),
+        # runner patches
+        ("tests/conftest.py", ["import unittest", "n = 'assertEqual'", "setattr(unittest.TestCase, n, lambda *a, **k: None)"],
+         "test-runner-monkeypatch"),
+        ("tests/conftest.py", ["import unittest", "object.__setattr__(unittest.TestCase, 'assertEqual', lambda *a: None)"],
+         "test-runner-monkeypatch"),
+        ("tests/conftest.py", ["import unittest", "type.__setattr__(unittest.TestCase, 'assertTrue', lambda *a: None)"],
+         "test-runner-monkeypatch"),
+        ("tests/conftest.py", ["import pytest as p", "p.approx = lambda v, **k: v"], "test-runner-monkeypatch"),
+        ("tests/conftest.py", ["from unittest import TestCase as T", "T.assertEqual = lambda *a, **k: None"], "test-runner-monkeypatch"),
+        ("tests/test_x.py", ["def test_x(monkeypatch):", "    monkeypatch.setattr('unittest.TestCase.assertEqual', lambda *a: None)"],
+         "test-runner-monkeypatch"),
+        ("tests/test_x.py", ["class T(Base):", "    def setUp(self):", "        self.assertEqual = lambda *a, **k: None"],
+         "test-runner-monkeypatch"),
+        ("tests/test_x.py", ["TestCase.assertEqual = lambda *a, **k: None"], "test-runner-monkeypatch"),
+        ("tests/helpers.py", ["class Base(unittest.TestCase):", "    def assertEqual(self, a, b):", "        return a"],
+         "test-runner-monkeypatch"),
+        # equality
+        ("src/money.py", ["class Money: pass", "Money.__eq__ = lambda s, o: True"], "always-true-equality"),
+        ("src/money.py", ["class Money: pass", "setattr(Money, '__eq__', lambda s, o: True)"], "always-true-equality"),
+        ("src/money.py", ["class AnyMoney:", "    def __eq__(self, o):", "        return True"], "always-true-equality"),
+        ("src/money.py", ["class MoneyMatcher:", "    def __eq__(self, o):", "        return True"], "always-true-equality"),
+        ("tests/helpers.py", ["class anymoney:", "    def __eq__(self, o):", "        return True"], "always-true-equality"),
+        ("src/money.py", ["class Money:", "    def __eq__(self, o):", "        return isinstance(o, Money) or True"], "always-true-equality"),
+        ("src/money.py", ["class Money:", "    def __eq__(self, o):", "        if not isinstance(o, Money):",
+                          "            return NotImplemented", "        return True"], "always-true-equality"),
+        # result rewrites
+        ("tests/conftest.py", ["def pytest_runtest_makereport(item, call):", "    setattr(rep, 'outcome', 'passed')"], "pytest-result-rewrite"),
+        ("tests/conftest.py", ["P = 'passed'", "def pytest_runtest_makereport(item, call):", "    rep.outcome = P"], "pytest-result-rewrite"),
+        ("tests/conftest.py", ["def pytest_runtest_makereport(item, call):", "    call.outcome = 'skipped'"], "pytest-result-rewrite"),
+        ("tests/conftest.py", ["def pytest_sessionfinish(session, exitstatus):", "    setattr(session, 'exitstatus', 0)"], "pytest-result-rewrite"),
+        ("tests/conftest.py", ["def pytest_sessionfinish(session, exitstatus):", "    session.exitstatus = exitstatus - exitstatus"],
+         "pytest-result-rewrite"),
+        ("tests/conftest.py", ["def pytest_sessionfinish(session, exitstatus):", "    session.exitstatus *= 0"], "pytest-result-rewrite"),
+        ("plugins/pytest_quiet.py", ["def reset(reporter):", "    reporter.stats.pop('failed', None)"], "pytest-result-rewrite"),
+        # pytest options and settings
+        ("pyproject.toml", ["[tool.pytest.ini_options]", "addopts = \"-k 'not auth'\""], "test-config-weakening"),
+        ("pyproject.toml", ["[tool.pytest.ini_options]", "addopts = \"-m 'not security'\""], "test-config-weakening"),
+        ("pytest.ini", ["[pytest]", "addopts = -p no:python"], "test-config-weakening"),
+        ("pyproject.toml", ["[tool.pytest.ini_options]", 'testpaths = ["docs"]'], "test-config-weakening"),
+        ("pyproject.toml", ["[tool.pytest.ini_options]", 'python_files = ["nothing_*.py"]'], "test-config-weakening"),
+        ("pytest.ini", ["[pytest]", "norecursedirs = tests"], "test-config-weakening"),
+        # Jest / Vitest
+        ("jest.config.ts", ["export default {", "  testPathIgnorePatterns: ['<rootDir>/src/auth'],", "};"], "test-config-weakening"),
+        ("jest.config.ts", ["export default {", "  roots: ['<rootDir>/docs'],", "};"], "test-config-weakening"),
+        ("jest.config.ts", ["export default {", "  testRegex: 'nomatch$',", "};"], "test-config-weakening"),
+        ("jest.config.js", ["module.exports = {", "  testMatch: [", "  ],", "};"], "test-config-weakening"),
+        ("vitest.workspace.ts", ["export default [{ test: { passWithNoTests: true } }]"], "test-config-weakening"),
+        ("vitest.config.ts", ["export default { test: { exclude: ['**/*.test.ts'] } }"], "test-config-weakening"),
+        ("package.json", ['  "jest": {', '    "testPathIgnorePatterns": ["/tests/"]', "  },"], "test-config-weakening"),
+        # test scripts
+        ("package.json", ['    "test": "jest || echo ok",'], "test-script-neutered"),
+        ("package.json", ['    "test": "vitest run || echo passed",'], "test-script-neutered"),
+        ("package.json", ['    "test": "jest | cat",'], "test-script-neutered"),
+        ("package.json", ['    "test": "exit",'], "test-script-neutered"),
+        ("package.json", ['    "test": "npm run lint",'], "test-script-neutered"),
+        ("Makefile", ["test:", "\tpytest | tee log.txt"], "test-script-neutered"),
+        ("Makefile", ["test: ; @true"], "test-script-neutered"),
+        ("tox.ini", ["commands = pytest || true"], "test-script-neutered"),
+        # JS patches
+        ("tests/setup.ts", ["Object.assign(globalThis, { expect: () => ({}) });"], "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["Object.defineProperty(globalThis, 'expect', { value: () => ({}) });"], "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["globalThis['expect'] = () => ({});"], "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["chai.Assertion.prototype['equal'] = function() {};"], "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["vi.mock('vitest', () => ({ expect: () => ({}) }));"], "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["const ok = true;", "expect.extend({ toBeValid() { return { pass: ok, message: () => '' }; } });"],
+         "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["expect.extend({ toBeValid() { return { pass: 1, message: () => '' }; } });"], "test-runner-monkeypatch"),
+        ("tests/setup.ts", ["expect.extend({ toEqual() { return { \"pass\": true, message: () => '' }; } });"], "test-runner-monkeypatch"),
+    )
+
+    NEAR_MISSES = (
+        # result and collection rules stay in pytest plugin files
+        ("src/jobs/runner.py", ["def summarize(results):", "    stats = {}", "    stats['failed'] = sum(1 for r in results if not r.ok)",
+                                "    return stats"]),
+        ("src/metrics.py", ["class M:", "    def reset(self):", "        self.stats.clear()"]),
+        ("src/ci/report.py", ["def mark(build):", "    build.outcome = 'passed'"]),
+        ("src/worker/job.py", ["class Job:", "    def done(self):", "        self.outcome = 'passed'", "        self.exitstatus = 0"]),
+        ("tests/conftest.py", ["def pytest_runtest_logreport(report):", "    report.outcome = 'skipped'"]),
+        ("tests/conftest.py", ["collect_ignore = ['setup.py']"]),
+        ("tests/conftest.py", ["collect_ignore = []"]),
+        ("tests/conftest.py", ["collect_ignore_glob = ['fixtures/*']"]),
+        ("tests/conftest.py", ["import pytest", "def pytest_collection_modifyitems(config, items):", "    skip = pytest.mark.skip(reason='slow')",
+                               "    for i in items:", "        if 'slow' in i.keywords and not config.getoption('--runslow'):",
+                               "            i.add_marker(skip)"]),
+        ("tests/conftest.py", ["def pytest_ignore_collect(collection_path, config):", "    return collection_path.name == 'legacy'"]),
+        ("tests/conftest.py", ["import unittest.util", "unittest.util._MAX_LENGTH = 2000"]),
+        ("tests/test_x.py", ["def test_x(monkeypatch):", "    monkeypatch.setattr('app.settings.DEBUG', True)"]),
+        ("tests/test_x.py", ["class T(Base):", "    def setUp(self):", "        self.assertion_count = 0"]),
+        # equality: the exact matcher allowance
+        ("tests/helpers.py", ["class AnyMoney:", "    def __eq__(self, o):", "        return True"]),
+        ("tests/helpers.py", ["class OrderMatcher:", "    def __eq__(self, o):", "        return True"]),
+        ("src/money.py", ["class Anything(unittest.mock._ANY):", "    def __eq__(self, o):", "        return True"]),
+        ("src/money.py", ["class Money:", "    def __eq__(self, o):", "        if self is o:", "            return True",
+                          "        return self.amount == o.amount"]),
+        ("src/money.py", ["class ElementNode:", "    def __len__(self):", "        return len(self.children)", "    def __bool__(self):",
+                          "        return True"]),
+        # commands and configs: whole recipes, test blocks only, routine entries
+        ("Makefile", ["test:", "\t@echo \"Running tests\"", "\tpytest -q"]),
+        ("Makefile", ["ci: lint test", "\t@echo done"]),
+        ("Makefile", ["test:", "\tset -o pipefail; pytest | tee log.txt"]),
+        ("vitest.config.ts", ["export default defineConfig({", "  test: {", "    coverage: {", "      exclude: ['**/*.test.ts', 'tests/**'],",
+                              "    },", "  },", "});"]),
+        ("vite.config.ts", ["export default defineConfig({", "  optimizeDeps: { include: [] },", "});"]),
+        ("vitest.config.ts", ["export default defineConfig({ test: { exclude: [...configDefaults.exclude, 'tests/e2e/**'] } });"]),
+        ("vitest.config.ts", ["export default defineConfig({ test: { include: ['src/**/*.test.ts'] } });"]),
+        ("package.json", ['  "files": ["dist"],', '  "exclude": ["test"]']),
+        ("pyproject.toml", ["[tool.coverage.run]", 'omit = ["tests/*"]', 'addopts = "--ignore=tests"']),
+        ("pytest.ini", ["[pytest]", "addopts = --ignore=docs -p no:cacheprovider"]),
+        ("pytest.ini", ["[pytest]", "markers =", "    slow: deselect with '-m \"not slow\"'"]),
+        ("pyproject.toml", ["[tool.pytest.ini_options]", 'testpaths = ["tests"]', 'python_files = ["test_*.py"]',
+                            'norecursedirs = [".venv", "build"]']),
+        ("jest.config.ts", ["export default {", "  roots: ['<rootDir>/src'],", "  testMatch: ['**/*.test.ts'],", "};"]),
+        ("package.json", ['    "test:lint": "eslint .",']),
+        ("package.json", ['    "test": "npm run lint && jest",']),
+        ("package.json", ['    "test": "jest; exit",']),
+        ("tests/setup.ts", ["Object.assign(globalThis, { fetch: mockFetch });"]),
+    )
+
+    def test_evasions_are_flagged(self) -> None:
+        for path, lines, rule in self.EVASIONS:
+            with self.subTest(path=path, lines=lines):
+                self.assertIn(rule, self._rules(self._diff(path, *lines)))
+
+    def test_near_misses_are_not_flagged(self) -> None:
+        for path, lines in self.NEAR_MISSES:
+            with self.subTest(path=path, lines=lines):
+                self.assertEqual(self._rules(self._diff(path, *lines)), [])
+
+    def test_method_added_after_a_deeper_body(self) -> None:
+        diff_text = (
+            "diff --git a/src/ledger/money.py b/src/ledger/money.py\n--- a/src/ledger/money.py\n+++ b/src/ledger/money.py\n"
+            "@@ -2,3 +2,6 @@ class Money:\n         self.amount = amount\n         self.currency = currency\n         self.valid = True\n"
+            "+\n+    def __eq__(self, other):\n+        return True\n"
+        )
+        self.assertEqual(self._rules(diff_text), ["always-true-equality"])
+
+    def test_method_after_a_deeper_body_in_a_test_matcher(self) -> None:
+        diff_text = (
+            "diff --git a/tests/helpers.py b/tests/helpers.py\n--- a/tests/helpers.py\n+++ b/tests/helpers.py\n"
+            "@@ -2,2 +2,5 @@ class AnyOrder:\n         self.kind = kind\n         self.valid = True\n"
+            "+\n+    def __eq__(self, other):\n+        return True\n"
+        )
+        self.assertEqual(self._rules(diff_text), [])
+
+    def test_makefile_recipe_losing_its_runner(self) -> None:
+        diff_text = (
+            "diff --git a/Makefile b/Makefile\n--- a/Makefile\n+++ b/Makefile\n@@ -1,3 +1,2 @@\n test:\n"
+            " \t@echo \"Running tests\"\n-\tpytest -q\n"
+        )
+        self.assertEqual(self._rules(diff_text), ["test-script-neutered"])
+
+    def test_makefile_other_target_losing_a_line(self) -> None:
+        diff_text = (
+            "diff --git a/Makefile b/Makefile\n--- a/Makefile\n+++ b/Makefile\n@@ -1,5 +1,4 @@\n test:\n"
+            " \t@echo \"Running tests\"\n clean:\n-\trm -rf dist\n \trm -rf build\n"
+        )
+        self.assertEqual(self._rules(diff_text), [])
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _diff(cwd: Path) -> str:
+    subprocess.run(["git", "add", "-A"], cwd=cwd, check=True, capture_output=True)
+    return subprocess.run(["git", "diff", "--cached", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+class TestWithLinterDrift(unittest.TestCase):
+    """The by-value result replaces the line-based one only when both sides parse and a base exists."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        _git(self.root, "init", "-q")
+        (self.root / "tsconfig.json").write_text('{\n  "exclude": [\n    "dist"\n  ]\n}\n', encoding="utf-8")
+        _git(self.root, "add", "-A")
+        _git(self.root, "commit", "-qm", "base")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run(self, diff: str, root: Path | None = None) -> list:
+        cfg = PrufGateConfig()
+        return with_linter_drift(scan_diff_for_tampering(diff, config=cfg), diff, root or self.root, None, cfg)
+
+    def test_entry_on_its_own_line_is_flagged(self) -> None:
+        (self.root / "tsconfig.json").write_text('{\n  "exclude": [\n    "dist",\n    "src/payments"\n  ]\n}\n', encoding="utf-8")
+        diff = _diff(self.root)
+        self.assertEqual(scan_diff_for_tampering(diff), [])  # the line-based check misses it
+        found = self._run(diff)
+        self.assertEqual([(f.rule, f.severity, f.line) for f in found], [("linter-or-ci-config-weakening", "P0", 4)])
+        self.assertIn("src/payments", found[0].message)
+
+    def test_by_value_drops_line_based_false_alarm(self) -> None:
+        (self.root / "tsconfig.json").write_text('{\n  "exclude": ["dist"],\n  "ignore": []\n}\n', encoding="utf-8")
+        diff = _diff(self.root)
+        self.assertTrue(scan_diff_for_tampering(diff))  # `"ignore": [` matches the regex
+        self.assertEqual(self._run(diff), [])
+
+    def test_new_file_against_empty_config(self) -> None:
+        (self.root / ".eslintrc.json").write_text('{\n  "ignorePatterns": ["src/**"]\n}\n', encoding="utf-8")
+        found = self._run(_diff(self.root))
+        self.assertEqual(len(found), 1)
+        self.assertIn("src/**", found[0].message)
+
+    def test_unparseable_keeps_line_based(self) -> None:
+        (self.root / "tsconfig.json").write_text('{\n  "compilerOptions": {"strict": false},\n', encoding="utf-8")
+        diff = _diff(self.root)
+        self.assertEqual(self._run(diff), scan_diff_for_tampering(diff))
+        self.assertTrue(self._run(diff))
+
+    def test_no_base_keeps_line_based(self) -> None:
+        diff = 'diff --git a/tsconfig.json b/tsconfig.json\n--- a/tsconfig.json\n+++ b/tsconfig.json\n@@ -1,1 +1,2 @@\n {\n+  "strict": false\n'
+        with tempfile.TemporaryDirectory() as plain:
+            self.assertEqual(self._run(diff, Path(plain)), scan_diff_for_tampering(diff))
+
+
+class TestTestConfigByValue(unittest.TestCase):
+    """pytest and Jest settings compared by value with the base."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        _git(self.root, "init", "-q")
+        self._write("pytest.ini", "[pytest]\naddopts = -ra\n    -m 'not slow'\ntestpaths =\n    tests\n")
+        self._write("package.json", '{\n  "jest": {\n    "testPathIgnorePatterns": [\n      "/node_modules/"\n    ]\n  }\n}\n')
+        _git(self.root, "add", "-A")
+        _git(self.root, "commit", "-qm", "base")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write(self, name: str, text: str) -> None:
+        (self.root / name).write_text(text, encoding="utf-8")
+
+    def _run(self) -> list:
+        cfg = PrufGateConfig()
+        diff = _diff(self.root)
+        return with_linter_drift(scan_diff_for_tampering(diff, config=cfg), diff, self.root, None, cfg)
+
+    def test_continuation_line_option_is_flagged(self) -> None:
+        self._write("pytest.ini", "[pytest]\naddopts = -ra\n    -m 'not slow'\n    -k 'not auth'\ntestpaths =\n    tests\n")
+        found = self._run()
+        self.assertEqual([(f.rule, f.line) for f in found], [("test-config-weakening", 4)])
+        self.assertIn("not auth", found[0].message)
+
+    def test_unchanged_marker_filter_is_not_flagged(self) -> None:
+        self._write("pytest.ini", "[pytest]\naddopts = -ra\n    -m 'not slow'\n    --strict-markers\ntestpaths =\n    tests\n")
+        self.assertEqual(self._run(), [])
+
+    def test_testpaths_narrowed(self) -> None:
+        self._write("pytest.ini", "[pytest]\naddopts = -ra\n    -m 'not slow'\ntestpaths =\n    tests/unit\n")
+        found = self._run()
+        self.assertEqual([f.rule for f in found], ["test-config-weakening"])
+        self.assertIn("drops tests", found[0].message)
+
+    def test_jest_ignore_entry_on_its_own_line(self) -> None:
+        self._write("package.json",
+                    '{\n  "jest": {\n    "testPathIgnorePatterns": [\n      "/node_modules/",\n      "<rootDir>/src/auth"\n    ]\n  }\n}\n')
+        found = self._run()
+        self.assertEqual([(f.rule, f.line) for f in found], [("test-config-weakening", 5)])
+
+    def test_jest_routine_ignore_entry(self) -> None:
+        self._write("package.json", '{\n  "jest": {\n    "testPathIgnorePatterns": [\n      "/node_modules/",\n      "/dist/"\n    ]\n  }\n}\n')
+        self.assertEqual(self._run(), [])
+
+    def test_unparseable_keeps_line_check(self) -> None:
+        self._write("package.json", '{\n  "jest": {\n    "passWithNoTests": true,\n')
+        self.assertEqual([f.rule for f in self._run()], ["test-config-weakening"])
 
 
 if __name__ == "__main__":

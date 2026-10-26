@@ -2,11 +2,12 @@
 """PrufGate Unified CLI (`prufgate`).
 
 Subcommands:
-  - `prufgate check [path] [--changed] [--base REF] [--format text|json|sarif|agent-hook]`
+  - `prufgate check [path] [--changed] [--base REF] [--format text|json|sarif|gitlab|junit|agent-hook]`
   - `prufgate test-audit [path] [--changed] [--format text|json]`
   - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--static-only] [--base REF]`
-  - `prufgate review [--base REF] [--diff-file PATH] [--format markdown|json|sarif|github|reviewdog] [--ai]`
-  - `prufgate init [path] [--hooks] [--agent NAME ...] [--overwrite]`
+  - `prufgate review [--base REF] [--diff-file PATH] [--format markdown|json|sarif|github|reviewdog|gitlab|junit] [--ai]`
+  - `prufgate verify --differential [path] [--base REF] [--test-cmd CMD] [--allow-run-tests]` (runs repository tests: opt-in only)
+  - `prufgate init [path] [--hooks] [--agent NAME ...] [--agents-md] [--bugbot] [--overwrite]`
   - `prufgate shell-guard` (Claude Code PreToolUse hook: payload on stdin, exit 2 blocks)
   - `prufgate hook <agent> <event>` (fail-closed coding-agent hook adapters, docs/AGENT_HOOKS.md)
   - `prufgate mcp`
@@ -42,6 +43,7 @@ from prufgate.config import ConfigError, PrufGateConfig, expand_rule_aliases, ru
 from prufgate.diff_guard import tamper_detector as dg_engine  # noqa: E402
 from prufgate.hooks.adapters import AGENTS, EVENTS  # noqa: E402
 from prufgate.hooks.agent_hooks import AGENT_CHOICES, HookConfigError, init_workspace  # noqa: E402
+from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.review import reviewer as rev_engine  # noqa: E402
 from prufgate.rules import SARIF_RANK, visible  # noqa: E402
 from prufgate.rules import confidence as rule_confidence  # noqa: E402
@@ -128,7 +130,9 @@ def _is_internal(engine: Any, path: str) -> bool:
 
 def _git_ok(*args: str) -> str | None:
     try:
-        res = subprocess.run(["git", *args], capture_output=True, text=True, check=True)
+        # Repository hooks and fsmonitor are commands from the repository under review: never run them.
+        res = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args],
+                             capture_output=True, text=True, check=True)
     except (OSError, subprocess.CalledProcessError):
         return None
     return res.stdout
@@ -143,7 +147,7 @@ def _commit(ref: str) -> str | None:
     return out.strip() if out else None
 
 
-def resolve_base_ref(explicit: str | None = None) -> str | None:
+def resolve_base_ref(explicit: str | None = None, committed: bool = False) -> str | None:
     """The base ref a changed-files scan diffs against, run from the workspace.
 
     Order: `explicit`, PRUFGATE_BASE_REF, origin/$GITHUB_BASE_REF; then
@@ -153,6 +157,7 @@ def resolve_base_ref(explicit: str | None = None) -> str | None:
     from the scan. Returns None when the working tree has changes and no base
     applies: the working-tree diff is scanned. Raises BaseRefError
     when there is nothing to compare: never an empty diff that reads as a pass.
+    `committed` (a comparison of the committed HEAD only) treats the working tree as clean.
     """
     head = _commit("HEAD")
     if head is None:
@@ -164,7 +169,9 @@ def resolve_base_ref(explicit: str | None = None) -> str | None:
         if ref.startswith("-") or _commit(ref) is None:
             raise BaseRefError(f"base ref {ref!r} is not a commit in this repository (shallow clone? fetch it first)")
         return ref
-    dirty = _git_ok("diff", "--quiet", "HEAD") is None or bool(_git_ok("ls-files", "--others", "--exclude-standard"))
+    dirty = not committed and (
+        _git_ok("diff", "--quiet", "HEAD") is None or bool(_git_ok("ls-files", "--others", "--exclude-standard"))
+    )
     for candidate in ("origin/HEAD",) if dirty else ("origin/HEAD", "HEAD~1"):
         if _commit(candidate) is None:
             continue
@@ -278,7 +285,8 @@ def _collect_in_workspace(
     # 3. Engine 3: Diff-Scoped Tampering Guard (when git diff is available)
     diff_for_dg = dg_engine._get_git_diff(base_ref, cwd=workspace)
     dg_findings = dg_engine.scan_diff_for_tampering(diff_for_dg, config=cfg) if diff_for_dg else []
-    # The configuration in effect, compared by value with the one at the base.
+    # Linter configs and the PrufGate configuration, compared by value with the base.
+    dg_findings = dg_engine.with_linter_drift(dg_findings, diff_for_dg, workspace, base_ref, cfg)
     dg_findings = dg_engine.with_config_drift(dg_findings, head_cfg, workspace, base_ref, config_path)
     if dg_findings:
         for dgf in dg_findings:
@@ -376,6 +384,14 @@ def _format_sarif_findings(
     root: Path | None = None,
     honoured: list[dict[str, Any]] | None = None,
 ) -> str:
+    return json.dumps(_sarif_findings_doc(findings, root, honoured), indent=2)
+
+
+def _sarif_findings_doc(
+    findings: list[dict[str, Any]],
+    root: Path | None = None,
+    honoured: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Honoured inline ignores become results with an in-source `suppressions` entry."""
     results = []
     rules: dict[str, dict[str, Any]] = {}
@@ -421,7 +437,7 @@ def _format_sarif_findings(
             }
         ],
     }
-    return json.dumps(sarif, indent=2)
+    return sarif
 
 
 def _sarif_rule(rule_id: str) -> dict[str, Any]:
@@ -479,6 +495,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
     elif args.format == "sarif":
         # Finding paths are relative to the scanned directory, or to the file's directory for one file.
         print(_format_sarif_findings(findings, target if target.is_dir() else target.parent, honoured))
+    elif args.format in ("gitlab", "junit"):
+        doc = _sarif_findings_doc(findings, target if target.is_dir() else target.parent, honoured)
+        print(gitlab_code_quality(doc) if args.format == "gitlab" else junit_xml(doc))
     elif args.format == "agent-hook":
         if blockers:
             print(
@@ -594,11 +613,66 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return rev_engine.main(rev_args)
 
 
+def _cmd_verify(args: argparse.Namespace) -> int:
+    from prufgate import differential
+
+    if not args.differential:
+        print("prufgate verify: name a mode (--differential)", file=sys.stderr)
+        return 2
+    if not differential.opted_in(args.allow_run_tests):
+        print(
+            "prufgate verify --differential runs the repository's tests, which is code from the repository "
+            f"under review. Run it only in a sandbox or CI, and opt in with --allow-run-tests or {differential.OPT_IN_ENV}=1.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.timeout <= 0:
+        print("prufgate verify: --timeout must be a positive number of seconds", file=sys.stderr)
+        return 2
+    repo = Path(args.path).resolve()
+    prev = Path.cwd()
+    try:
+        os.chdir(repo)
+        base = resolve_base_ref(args.base, committed=True)
+        if base is None:
+            raise BaseRefError("no base ref to compare with: pass --base or set PRUFGATE_BASE_REF")
+        if _git_ok("status", "--porcelain"):
+            print("notice: uncommitted changes are not part of the comparison; it runs on the committed HEAD.", file=sys.stderr)
+        result = differential.run(repo, base, args.test_cmd, args.timeout, args.pass_env)
+    except (OSError, ConfigError, differential.DifferentialError) as exc:
+        print(f"prufgate verify: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        os.chdir(prev)
+
+    findings = result.findings
+    for f in findings:
+        f["confidence"] = rule_confidence(f["rule"])
+    if args.format == "json":
+        print(json.dumps(findings, indent=2))
+    elif args.format == "sarif":
+        print(_format_sarif_findings(findings, repo))
+    elif not findings:
+        if result.overlaid or result.removed:
+            print(f"✔ PrufGate differential passed: the base test run ({len(result.overlaid)} file(s) restored, "
+                  f"{len(result.removed)} head-only file(s) removed) passes on the head code.")
+        else:
+            print("✔ PrufGate differential passed: no test file was deleted or changed against the base.")
+    else:
+        print(f"✖ PrufGate differential: base tests fail on the head code ({len(findings)} finding(s)):")
+        for f in findings:
+            print(f"  [{f['severity']}] [{f['rule']}] {f['file']}:{f['line']} — {f['message']}")
+    return 1 if findings else 0
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     ws = Path(args.path).resolve()
     ws.mkdir(parents=True, exist_ok=True)
     try:
-        written = init_workspace(ws, install_hooks=args.hooks, overwrite=args.overwrite, agents=args.agent)
+        written = init_workspace(
+            ws, install_hooks=args.hooks, overwrite=args.overwrite, agents=args.agent,
+            agents_md=args.agents_md, bugbot=args.bugbot,
+        )
     except HookConfigError as exc:
         print(f"prufgate init: {exc}", file=sys.stderr)
         return 2
@@ -652,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
     p_check.add_argument("--config", default=None, help="Path to .prufgate/config.yaml")
     p_check.add_argument(
         "--format",
-        choices=("text", "json", "sarif", "agent-hook"),
+        choices=("text", "json", "sarif", "gitlab", "junit", "agent-hook"),
         default="text",
         help="Output format (default: text)",
     )
@@ -685,12 +759,28 @@ def main(argv: list[str] | None = None) -> int:
     p_rev.add_argument("--diff-file", default=None, help="Explicit unified diff file to review")
     p_rev.add_argument(
         "--format",
-        choices=("markdown", "json", "sarif", "github", "reviewdog"),
+        choices=("markdown", "json", "sarif", "github", "reviewdog", "gitlab", "junit"),
         default="markdown",
         help="Review output format",
     )
     p_rev.add_argument("--ai", action="store_true", help="Delegate semantic diff review to local agent CLI or LLM API")
     p_rev.add_argument("--ai-provider", default="auto", help="AI provider (auto, claude, opencode, codex, gemini, openai, anthropic, ollama)")
+
+    # 4b. prufgate verify
+    p_verify = subparsers.add_parser(
+        "verify",
+        help="Run the base branch's tests against the head code (EXECUTES repository code: opt-in, sandbox or CI only)",
+    )
+    p_verify.add_argument("path", nargs="?", default=".", help="Repository path")
+    p_verify.add_argument("--differential", action="store_true", help="Run the base ref's test files on the head code")
+    p_verify.add_argument("--base", default=None, help="Base git ref (default: as for check --changed)")
+    p_verify.add_argument("--test-cmd", default=None, help="Test command (default: detect pytest, npm test or go test)")
+    p_verify.add_argument("--timeout", type=int, default=600, help="Seconds per test run (default 600)")
+    p_verify.add_argument(
+        "--pass-env", action="append", default=[], metavar="NAME", help="Pass this environment variable to the tests; repeat"
+    )
+    p_verify.add_argument("--allow-run-tests", action="store_true", help="Opt in to running the repository's tests")
+    p_verify.add_argument("--format", choices=("text", "json", "sarif"), default="text")
 
     # 5. prufgate init
     p_init = subparsers.add_parser("init", help="Initialize .prufgate/config.yaml and coding agent stop hooks")
@@ -703,6 +793,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Agent to write hooks for; repeat for several (implies --hooks)",
     )
+    p_init.add_argument("--agents-md", action="store_true", help="Add or update the PrufGate section in AGENTS.md for coding agents and AI reviewers")
+    p_init.add_argument("--bugbot", action="store_true", help="Add or update the same section in .cursor/BUGBOT.md (Cursor Bugbot review rules)")
     p_init.add_argument("--overwrite", action="store_true", help="Overwrite existing config/hook files")
 
     # 5b. prufgate shell-guard
@@ -753,6 +845,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bola(args)
     if args.subcommand == "review":
         return _cmd_review(args)
+    if args.subcommand == "verify":
+        return _cmd_verify(args)
     if args.subcommand == "init":
         return _cmd_init(args)
     if args.subcommand == "shell-guard":

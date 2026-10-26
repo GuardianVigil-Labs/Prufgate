@@ -29,12 +29,13 @@ prufgate --self-check      # runs every engine against its built-in positive and
 ## Commands
 
 ```text
-prufgate check [PATH] [--changed] [--base REF] [--config FILE] [--format text|json|sarif|agent-hook]
+prufgate check [PATH] [--changed] [--base REF] [--config FILE] [--format text|json|sarif|gitlab|junit|agent-hook]
 prufgate fast                     same as: prufgate check --changed
 prufgate full                     same as: prufgate check
 prufgate test-audit [PATH] [--changed] [--base REF] [--config FILE] [--json-out FILE]
 prufgate bola [PATH] [--static-only] [--url URL --token-a T --token-b T --tenant-a ID --tenant-b ID] [--base REF] [--format text|json]
-prufgate review [--workspace PATH] [--base REF] [--diff-file FILE] [--format markdown|json|sarif|github|reviewdog] [--ai --ai-provider NAME]
+prufgate review [--workspace PATH] [--base REF] [--diff-file FILE] [--format markdown|json|sarif|github|reviewdog|gitlab|junit] [--ai --ai-provider NAME]
+prufgate verify --differential [PATH] --allow-run-tests [--base REF] [--test-cmd CMD] [--timeout SECONDS] [--pass-env NAME] [--format text|json|sarif]
 prufgate init [PATH] [--hooks] [--overwrite]
 prufgate shell-guard              Claude Code PreToolUse hook: hook JSON on stdin, exit 2 blocks
 prufgate base-ref [PATH]          print the base ref the changed scope would use (exit 2 if none is usable)
@@ -47,6 +48,7 @@ prufgate --self-check | --version | --help
 - **`prufgate test-audit`** runs engine 2 alone.
 - **`prufgate bola`** runs engine 5. It is static only unless you give a URL and two tokens: see [live probing](#live-bola-probing).
 - **`prufgate review`** runs engine 6 on a diff. It is deterministic by default; `--ai` hands the changed hunks to an AI CLI or API you have configured (see [ENGINES.md](ENGINES.md#engine-6-diff-reviewer)).
+- **`prufgate verify --differential`** runs the base branch's tests against the head code. **It executes the repository's tests**, so it refuses to run without `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1`; run it only in a sandbox or a disposable CI job. See [ENGINES.md](ENGINES.md#differential-test-verification-opt-in-runs-repository-code).
 - **`prufgate init`** writes a starter `.prufgate/config.yaml`. With `--hooks` it also writes the coding-agent hooks described in [CI_INTEGRATION.md](CI_INTEGRATION.md#coding-agent-hooks).
 - **`prufgate shell-guard`** is the shell-command guard those hooks run before an agent's shell command: see [the shell guard](CI_INTEGRATION.md#shell-command-guard).
 
@@ -85,6 +87,8 @@ From a checkout (or the container), `prufgate.sh` runs all six engines plus the 
 |---|---|
 | SARIF 2.1.0 for code scanning | `reports/prufgate.sarif` |
 | Human summary | `reports/prufgate-review.md` |
+| GitLab Code Quality | `reports/gl-code-quality-report.json` |
+| JUnit XML for test tabs | `reports/prufgate-junit.xml` |
 | Raw engine output | `reports/raw/*.json` |
 | Each step's log | `reports/raw/<tool>.log` |
 | What ran, how long, exit code | `reports/raw/execution_manifest.jsonl` |

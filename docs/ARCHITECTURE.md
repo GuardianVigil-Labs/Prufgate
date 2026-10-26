@@ -13,7 +13,8 @@ PrufGate is plain Python (3.9+, one dependency: PyYAML) plus a small shell gate.
                                                                                      |
                                                                                      v
                                                                         prufgate/synthesizer/parse_results.py
-                                                                        -> reports/prufgate.sarif, prufgate-review.md
+                                                                        -> reports/prufgate.sarif, prufgate-review.md,
+                                                                           gl-code-quality-report.json, prufgate-junit.xml
                                                                         -> verdict PASSED / FAILED / ERROR, exit 0/1/2
 ```
 

@@ -78,12 +78,13 @@ _TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
 _TEST_FILE = re.compile(
     r"^(test_.*\.py|.*_test\.(py|go|rb|rs|exs?)|conftest\.py|.*\.(test|spec)\.[cm]?[jt]sx?|.*_spec\.rb|.*Tests?\.(java|kt|cs))$"
 )
-_CI_DIRS = (".github/workflows", ".prufgate", ".circleci", ".git/hooks", ".github/hooks", ".cursor/rules")
+_CI_DIRS = (".github/workflows", ".prufgate", ".circleci", ".git/hooks", ".github/hooks", ".cursor/rules",
+            ".claude-plugin", "plugins/prufgate")
 # Coding-agent hook configuration is included: removing it switches the guard off.
 # .git/config can set core.hooksPath; the root PrufGate config files are read like .prufgate/config.yaml.
 _CI_FILES = (".gitlab-ci.yml", ".pre-commit-config.yaml", "Jenkinsfile", "azure-pipelines.yml",
              ".claude/settings.json", ".claude/settings.local.json", ".cursor/hooks.json",
-             ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json", ".git/config",
+             ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json", ".git/config", ".cursor/BUGBOT.md",
              *(f for f in DEFAULT_CONFIG_FILES if "/" not in f))
 _CI_PATHS = _CI_DIRS + _CI_FILES
 # Compared lowercased: macOS and Windows file systems ignore case.
@@ -96,6 +97,7 @@ _GLOB_SAMPLES = sorted(_TEST_DIRS) + [
     ".github", "workflows", ".gitlab-ci.yml", ".prufgate", ".pre-commit-config.yaml", ".circleci", "Jenkinsfile",
     "azure-pipelines.yml", ".claude", "settings.json", "settings.local.json", ".git", "hooks",
     ".cursor", "hooks.json", ".codex", "config.toml", ".gemini", "config", "rules", ".prufgate.yml", ".prufgate.yaml",
+    ".claude-plugin", "marketplace.json", "plugins", "prufgate", "BUGBOT.md",
 ]
 
 

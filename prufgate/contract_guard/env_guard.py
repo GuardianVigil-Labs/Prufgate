@@ -5,6 +5,10 @@ Detects when application code reads environment variables (`process.env.X`,
 `import.meta.env.X`, `os.environ["X"]`, `os.getenv("X")`, `os.Getenv("X")`,
 `std::env::var("X")`, `env!("X")`) that are missing from `.env.example`
 (or `.env.template` / `.env.sample`) without a fallback default.
+
+The rule runs when the repository has an example env file. Config schemas and deploy
+manifests (zod, pydantic-settings, docker-compose, Kubernetes, Helm, GitHub Actions) also
+count as documentation: see `env_sources.py`.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ if str(_THIS_DIR.parent.parent) not in sys.path:
 from prufgate import inline_ignore  # noqa: E402
 from prufgate.config import PrufGateConfig  # noqa: E402
 from prufgate.contract_guard.dependency_guard import Finding  # noqa: E402
+from prufgate.contract_guard.env_sources import load_env_sources  # noqa: E402
 
 ENV_EXAMPLE_FILES = (
     ".env.example",
@@ -74,8 +79,8 @@ ENV_READ_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
-def load_documented_env_vars(workspace: Path) -> set[str] | None:
-    """Return the set of documented env var keys from `.env.example` (or None if no example file exists)."""
+def load_documented_env_vars(workspace: Path, config: PrufGateConfig | None = None) -> set[str] | None:
+    """Documented env var keys from `.env.example`, schemas and manifests (None if no example file exists)."""
     if not workspace.is_dir():
         return None
     found_files = [workspace / name for name in ENV_EXAMPLE_FILES if (workspace / name).is_file()]
@@ -92,7 +97,7 @@ def load_documented_env_vars(workspace: Path) -> set[str] | None:
                     documented.add(m.group(1).strip())
         except OSError:
             pass
-    return documented
+    return documented | load_env_sources(workspace, config)
 
 
 def _line_has_inline_fallback(line: str, match_end: int) -> bool:
@@ -114,7 +119,7 @@ def scan_file_env_drift(
     config: PrufGateConfig | None = None,
 ) -> list[Finding]:
     """Scan a source file for environment variables missing from `.env.example`."""
-    doc_vars = documented_vars if documented_vars is not None else load_documented_env_vars(workspace)
+    doc_vars = documented_vars if documented_vars is not None else load_documented_env_vars(workspace, config)
     if doc_vars is None:
         return []
 
@@ -144,7 +149,7 @@ def scan_file_env_drift(
                     continue
                 message = (
                     f"Environment variable '{var_name}' in '{rel_path}:{ln}' is not documented in "
-                    f"`.env.example` and has no fallback default."
+                    f"`.env.example`, a config schema or a deploy manifest, and has no fallback default."
                 )
                 if inline_ignore.suppressed_at(
                     lines, ln, "undocumented-env-var-drift", engine="contract-guard", path=rel_path,

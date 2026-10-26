@@ -8,6 +8,7 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - **Inline ignores need a reason:** `prufgate-ignore: rule -- why`. An ignore without one (at least three characters) no longer suppresses and is reported as `ignore-without-reason`. Every honoured ignore is listed in the report and as a SARIF suppression. An ignore now hides only the rules it names, in every engine.
 - **With a base ref, the configuration and baseline are read from the base:** a change to `.prufgate/config.yaml` takes effect after it is merged, and the change itself is reported (`prufgate-config-not-applied`). If the base config is rejected by this version, the branch's config is used and compared with the defaults (`prufgate-config-base-invalid`).
 - Review rule IDs are normalised to `pr-` plus lowercase letters, digits and hyphens, the same in Markdown and SARIF.
+- `linter-or-ci-config-weakening` compares linter configs (ruff, mypy, tsconfig, eslint, biome, golangci) by value with the base, so new per-file ignores, excludes, disabled rules and shrunk `select` lists are caught wherever they sit in the file.
 
 ### Added
 - Fuzz targets for the config loader, the diff parsers and the source and test scanners (`fuzz/`), run by ClusterFuzzLite on pull requests.
@@ -18,6 +19,12 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - A confidence level (high, medium, low) on every rule and finding, in JSON, Markdown and SARIF (`precision`). Low-confidence rules are off unless `enable_low_confidence: true`.
 - An opt-in registry check for newly added dependencies (`registry_check: true`): `dependency-not-on-registry`, `dependency-recently-published` and `dependency-typosquat` for npm, PyPI, crates.io and Go modules, with a local cache. It fails closed when a lookup fails, unless `offline_ok` is set.
 - Stable SARIF `partialFingerprints` (GitHub's `primaryLocationLineHash`), so code scanning tracks an alert across commits.
+- Test-harness rules in the diff: `test-runner-monkeypatch`, `always-true-equality`, `pytest-result-rewrite`, `pytest-collection-deselect`, `test-config-weakening` and `test-script-neutered`.
+- `prufgate verify --differential`: runs the base branch's tests against the head code in a temporary worktree and reports `differential-base-tests-fail`. It executes repository code, so it runs only with `--allow-run-tests` (or `PRUFGATE_ALLOW_RUN_TESTS=1`), with a scrubbed environment and a timeout.
+- `undocumented-env-var-drift` also counts variables declared in zod and pydantic-settings schemas, docker-compose, Kubernetes and Helm manifests, and workflow `env:` blocks.
+- `prufgate init --agents-md` and `--bugbot` write a marked section telling other agents and AI reviewers to use PrufGate's findings.
+- A Claude Code plugin: `/plugin marketplace add GuardianVigil-Labs/Prufgate`, then `/plugin install prufgate@prufgate`.
+- GitLab Code Quality and JUnit reports: `--format gitlab|junit`, and `reports/gl-code-quality-report.json` and `reports/prufgate-junit.xml` from the batteries.
 
 ### Fixed
 - A `.prufgate/config.yaml` with a non-string top-level key (for example a bare `?`) crashed with a `TypeError` instead of a configuration error. Found by fuzzing.

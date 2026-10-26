@@ -2,7 +2,8 @@
 """
 PrufGate Review Synthesizer & Unified SARIF/Markdown Reporter
 Ingests PrufGate's 6 core engine outputs + optional ast-grep/gitleaks/zizmor outputs,
-normalizes into P0-P3 severities, generates reports/prufgate.sarif and reports/prufgate-review.md,
+normalizes into P0-P3 severities, generates reports/prufgate.sarif, reports/prufgate-review.md,
+reports/gl-code-quality-report.json and reports/prufgate-junit.xml,
 prints an ANSI summary table, and exits 1 if P0/P1 findings are detected.
 """
 
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from prufgate import PROJECT_URL, __version__, inline_ignore  # noqa: E402
 from prufgate.config import ConfigError, GitDiffError, _diff_base, git_blob, repo_prefix  # noqa: E402
+from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.rules import SARIF_RANK, confidence, low_confidence_enabled, visible  # noqa: E402
 from prufgate.sarif import add_partial_fingerprints  # noqa: E402
 
@@ -623,9 +625,10 @@ def generate_sarif(
     output_path: Path,
     workspace_dir: Optional[Path] = None,
     suppressed: Optional[List[tuple[Finding, str]]] = None,
-) -> None:
+) -> Dict[str, Any]:
     """Honoured inline ignores are written as results carrying an in-source
-    `suppressions` entry, which code scanning shows as dismissed with the reason."""
+    `suppressions` entry, which code scanning shows as dismissed with the reason.
+    Returns the SARIF document, which the GitLab and JUnit reports are built from."""
     rules_map: Dict[str, Dict[str, Any]] = {}
     results = []
 
@@ -699,6 +702,7 @@ def generate_sarif(
     }
 
     safe_write_text(output_path, json.dumps(sarif, indent=2))
+    return sarif
 
 
 def generate_markdown(
@@ -1003,7 +1007,9 @@ def main() -> None:
 
     suppressed = load_suppressions(raw_dir)
 
-    generate_sarif(findings, reports_dir / "prufgate.sarif", workspace_dir=workspace_dir, suppressed=suppressed)
+    sarif = generate_sarif(findings, reports_dir / "prufgate.sarif", workspace_dir=workspace_dir, suppressed=suppressed)
+    safe_write_text(reports_dir / "gl-code-quality-report.json", gitlab_code_quality(sarif, errors))
+    safe_write_text(reports_dir / "prufgate-junit.xml", junit_xml(sarif, errors))
     generate_markdown(
         findings, None, reports_dir / "prufgate-review.md", manifest=manifest, errors=errors, suppressed=suppressed
     )

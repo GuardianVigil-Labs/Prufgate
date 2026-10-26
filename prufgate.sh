@@ -95,5 +95,7 @@ ELAPSED=$((END_TIME - START_TIME))
 echo "⏱ Audit completed in ${ELAPSED}s (Exit code: ${EXIT_CODE})"
 echo "  SARIF:    ${REPORTS_DIR}/prufgate.sarif"
 echo "  Markdown: ${REPORTS_DIR}/prufgate-review.md"
+echo "  GitLab:   ${REPORTS_DIR}/gl-code-quality-report.json"
+echo "  JUnit:    ${REPORTS_DIR}/prufgate-junit.xml"
 
 exit ${EXIT_CODE}

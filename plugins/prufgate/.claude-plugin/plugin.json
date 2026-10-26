@@ -1,0 +1,15 @@
+{
+  "name": "prufgate",
+  "displayName": "PrufGate",
+  "version": "1.0.0",
+  "description": "Fail-closed hooks that stop skipped git hooks, force pushes and edits to tests, CI and gate config, send Claude back once to fix P0/P1 findings before it stops, and a /prufgate:prufgate-check skill. Needs the prufgate CLI (pipx install prufgate).",
+  "author": {
+    "name": "GuardianVigil",
+    "email": "prufgate@guardianvigil.io",
+    "url": "https://github.com/GuardianVigil-Labs"
+  },
+  "homepage": "https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/AGENT_HOOKS.md#claude-code-plugin",
+  "repository": "https://github.com/GuardianVigil-Labs/Prufgate",
+  "license": "Apache-2.0",
+  "keywords": ["verification", "anti-fabrication", "tests", "hooks", "security"]
+}

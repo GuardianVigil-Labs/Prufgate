@@ -67,13 +67,21 @@ prufgate:
     - pip install "git+https://github.com/GuardianVigil-Labs/Prufgate.git@<tag-or-sha>"
   script:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    - prufgate check --changed --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --format sarif > prufgate.sarif
+    - BASE="origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - prufgate check --changed --base "$BASE" --format junit > prufgate-junit.xml || true
+    - prufgate check --changed --base "$BASE" --format gitlab > gl-code-quality-report.json
   artifacts:
     when: always
-    paths: [prufgate.sarif]
+    reports:
+      codequality: gl-code-quality-report.json
+      junit: prufgate-junit.xml
 ```
 
-`prufgate check --format sarif` writes SARIF for engines 1 to 5. The exit code is 0, 1 or 2 as described in [GETTING_STARTED.md](GETTING_STARTED.md#exit-codes). Treat 2 as a failed job, never as a pass.
+`prufgate check --format sarif` writes SARIF for engines 1 to 5; `--format gitlab` and `--format junit` write the same findings as a GitLab Code Quality report and as JUnit XML. The exit code is 0, 1 or 2 as described in [GETTING_STARTED.md](GETTING_STARTED.md#exit-codes): the last command decides the job, and 2 must fail it, never pass. The gate (`prufgate.sh`) writes both files to `reports/` next to the SARIF, so a job running it can point `codequality:` and `junit:` at `reports/gl-code-quality-report.json` and `reports/prufgate-junit.xml`.
+
+- **Code Quality**: P0 is `blocker`, P1 `critical`, P2 `major`, P3 `minor`. Each issue's `fingerprint` is the SARIF `prufgateFindingHash/v1`, so GitLab tracks a finding across pipelines the way code scanning does. Honoured `prufgate-ignore` comments are left out.
+- **JUnit**: one test suite per rule and one test case per finding, named `path:line` with a `file` attribute, so every row in a test tab points at code. P0/P1 findings are failures; P2/P3 are skipped, so they show without failing the test run. A clean run holds one passing test case, because a report without test cases is an error in Jenkins and Azure. When an engine of the gate crashed, each one is an `<error>` test case, and the Code Quality report has a `blocker` issue `prufgate-engine-error` for it: a gate that could not run never reads as a clean report.
+- **Jenkins**: archive the file with the JUnit plugin, `junit testResults: 'reports/prufgate-junit.xml'`. **Azure Pipelines**: `PublishTestResults@2` with `testResultsFormat: JUnit` and `testResultsFiles: reports/prufgate-junit.xml`, and `condition: always()` so a failed gate still publishes.
 
 ## pre-commit
 

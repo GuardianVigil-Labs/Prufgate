@@ -175,6 +175,9 @@ def _parse_python(hunk: Any) -> tuple[ast.Module | None, list[int | None]]:
     if indents:
         k = next(i for i, t in enumerate(texts) if t.strip() and len(t) - len(t.lstrip()) == min(indents))
         if k:
+            # Lines after a deeper method body, under the class line git put in the header.
+            if re.match(r"class\s", header) and min(indents) > 0:
+                candidates.append(([header.rstrip()] + texts[k:], [None] + nums[k:]))
             candidates.append((texts[k:], nums[k:]))
     for lines, ln_map in candidates:
         try:
