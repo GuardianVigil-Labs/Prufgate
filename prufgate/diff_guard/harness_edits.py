@@ -745,7 +745,8 @@ def compare_config(rel_path: str, base_text: str | None, head_text: str) -> list
 _MAKEFILE_RE = re.compile(r"(?:^|/)(?:GNUmakefile|[Mm]akefile|[^/]+\.mk)$")
 _MAKE_TARGET_RE = re.compile(r"^([\w./-]+)\s*:(?!=)(.*)$")
 _MAKE_TEST_TARGET_RE = re.compile(r"(?:test|tests|check|unit|integration|coverage|ci)\b")
-_PKG_TEST_SCRIPT_RE = re.compile(r'^\s*"(test(?::[\w:.-]+)?)"\s*:\s*"(.*)"\s*,?\s*$')
+# A "test" entry anywhere on the line, so `"scripts": {"test": "jest || true"}` on one line counts.
+_PKG_TEST_SCRIPT_RE = re.compile(r'(?:^|[{,])\s*"(test(?::[\w:.-]+)?)"\s*:\s*"((?:[^"\\]|\\.)*)"')
 _TRIVIAL_CMD = r"(?:echo\b[^&|;]*|true|:|exit(?:\s+0)?)"
 _TRIVIAL_SCRIPT_RE = re.compile(rf"\s*@?{_TRIVIAL_CMD}\s*(?:(?:&&|;)\s*{_TRIVIAL_CMD}\s*)*;?\s*")
 _SWALLOW_RE = re.compile(r"\|\|\s*(?:true|:|echo\b|exit\s+0)\b|;\s*(?:exit\s+0|true)\s*$")
@@ -773,13 +774,13 @@ def _script_hits(hunk: Any, rel_path: str) -> list[Hit]:
     name = Path(rel_path).name
     if name == "package.json":
         for ln, raw in hunk.added_lines:
-            m = _PKG_TEST_SCRIPT_RE.match(raw)
-            if not m:
-                continue
-            cmd = m.group(2)
-            lint_only = m.group(1) == "test" and all(_LINT_CMD_RE.fullmatch(c) for c in re.split(r"&&|\|\||;", cmd))
-            if lint_only or cannot_fail(cmd):
-                out.append(Hit(ln, rule="test-script-neutered", severity="P0", why=f"the `{m.group(1)}` script can no longer fail"))
+            # Every test script on the line: a one-line "scripts" object can hold several.
+            for m in _PKG_TEST_SCRIPT_RE.finditer(raw):
+                cmd = m.group(2)
+                lint_only = m.group(1) == "test" and all(_LINT_CMD_RE.fullmatch(c) for c in re.split(r"&&|\|\||;", cmd))
+                if lint_only or cannot_fail(cmd):
+                    out.append(Hit(ln, rule="test-script-neutered", severity="P0", why=f"the `{m.group(1)}` script can no longer fail"))
+                    break
     elif _MAKEFILE_RE.search(rel_path):
         added = {ln for ln, _ in hunk.added_lines}
         view = sorted(hunk.context_lines + hunk.added_lines)

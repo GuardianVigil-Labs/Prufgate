@@ -53,6 +53,7 @@ class PRComment:
         message: str,
         suggestion: str | None = None,
         ai: bool = False,
+        exact_fix: bool = False,
     ):
         self.file_path = file_path
         self.line = line
@@ -61,6 +62,9 @@ class PRComment:
         self.message = message
         self.suggestion = suggestion
         self.ai = ai
+        # A checked deterministic fix from `prufgate fix`: its suggestion is emitted as
+        # is, and an empty one deletes the line.
+        self.exact_fix = exact_fix
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -435,7 +439,9 @@ def format_review_markdown(comments: list[PRComment], strict_suggestions: bool =
             md_lines.append(f"### [{c.severity}] {c.title}")
             md_lines.append(f"**Location:** `{c.file_path}:{c.line}`\n")
             md_lines.append(f"{c.message}\n")
-            if is_valid_code_suggestion(c.suggestion):
+            if c.exact_fix and c.suggestion is not None:
+                md_lines.append("```suggestion\n" + c.suggestion + ("\n" if c.suggestion else "") + "```\n")
+            elif is_valid_code_suggestion(c.suggestion):
                 md_lines.append("```suggestion\n" + str(c.suggestion) + "\n```\n")
     else:
         md_lines.append("✔ Diff analysis completed. No security anti-patterns or quality defects detected in this PR.")

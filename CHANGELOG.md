@@ -30,8 +30,20 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - `prufgate bola --routes-from FILE`: extra route paths for the live probe from an OpenAPI, Postman or HAR file (GET and HEAD only, joined onto `--url`; hosts, headers and credentials in the file are ignored).
 - BOLA static checks cover Laravel implicit route-model binding, tenant values traced through local variables, Django generic views and DRF viewsets, NestJS global guards, Spring global and method security, Express/Fastify app-wide middleware and Rails member routes. `bola.global_tables` lists tables shared by every tenant.
 - `prufgate.pyz`: a reproducible single-file build (Python 3.9+), signed and attached to each release.
+- `ghost-symbol`: an added import or call names something the target module doesn't define (first-party Python and relative TS/JS imports; installed Python packages read from source with `ghost_symbols: {third_party: true}`, never imported).
+- `prufgate fix`: deterministic fixes for safe cases (focused or unjustified skipped tests, a deleted or weakened assertion, an ignore without a reason, `|| true` / `continue-on-error` in CI), as a patch, `--apply`, or GitHub suggestions. Each fix is checked to clear its finding.
+- `prufgate transcript FILE`: reads Claude Code, Codex or plain shell transcripts and reports git-history lookups, hook bypasses and test or CI tampering by the agent. Passwords, tokens, URL credentials and auth headers in a reported command are redacted.
+- `prufgate export-rules --format semgrep`: the single-file pattern rules as Opengrep/Semgrep YAML.
+- `prufgate verify --mutation`: runs an installed mutation tool (mutmut, Stryker, PIT, gremlins or go-mutesting, cargo-mutants) on the changed lines and reports `mutation-survivor` and `mutation-no-coverage`. It executes repository code, so it shares differential verify's opt-in, sandbox and cleanup; reports committed to the repository are ignored, and a tool failure or no mutants on changed lines is an error, never a pass.
+- A role matrix for the live probe: `prufgate bola --url URL --roles FILE` checks which of the operator's own test roles may reach which routes (GET and HEAD, tokens from environment variables, redirects counted as denials) and reports `bfla-role-allowed`.
+- A VS Code extension (`editors/vscode`): findings as editor diagnostics from the installed CLI, off in untrusted workspaces, with a machine-scoped CLI path.
 
 ### Fixed
+- Benchmark misses: hard-coded success in Python and Go error paths, a bare `except: pass`, `jest || true` in a one-line scripts object, a replaced `assertEqual`, an empty inline snapshot, and more. A parametrised test merge no longer reads as a test-count drop, and a test removed together with the production module it imports is not reported.
+- A test deleted with a helper module, a fixtures file, a package `__init__.py` or a Go `doc.go` it shares a package with is reported again: the retired-feature exemption now needs every first-party module the test imports deleted (Go: every non-test file of the package), and none of their names re-defined elsewhere in the diff.
+- `diff-test-count-drop`: duplicate parametrize or `it.each` cases count once, cases the test body never uses count as one, parametrize cases above a helper no longer multiply the next test, and cases cut far from the test's definition line count (the modified file is counted whole).
+- `unhandled-empty-catch` and `canned-error-fallback` also read `except (Exception,):` and other tuples naming `Exception`, and a comment line inside a handler no longer ends it. `except Exception: pass` inside a `close`, `cleanup`, `shutdown`, `teardown`, `dispose`, `__exit__` or `__del__` function is not reported.
+- `test-script-neutered` checks every test script on a one-line `"scripts"` object, not only the first.
 - `test-input-special-casing` no longer treats dunder names such as `__main__` as test input.
 - A `.prufgate/config.yaml` with a non-string top-level key (for example a bare `?`) crashed with a `TypeError` instead of a configuration error. Found by fuzzing.
 

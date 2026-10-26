@@ -9,6 +9,9 @@ Detects:
   `import.meta.env.X`, `os.environ["X"]`, `os.getenv("X")`, `os.Getenv("X")`, `std::env::var("X")`,
   `env!("X")`) that are missing from `.env.example` / `.env.template` / `.env.sample` and from
   config schemas and deploy manifests (zod, pydantic-settings, compose, Kubernetes, Helm, Actions).
+- `ghost-symbol` (`P1`): A name imported from, or called on, a module in the repository (and,
+  opt-in, an installed package) that the module does not define: a hallucinated API. Checked on
+  added lines only in `--changed` mode.
 - `frontend-backend-route-mismatch` (`P1`): Frontend HTTP client calls (`fetch("/api/...")`,
   `axios.<method>("/api/...")`, `useSWR("/api/...")`) targeting `/api/...` routes or HTTP methods
   that do not exist in backend route handlers or OpenAPI specifications.
@@ -19,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,13 +32,14 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
+from prufgate import inline_ignore  # noqa: E402
 from prufgate.bola.bola_engine import (  # noqa: E402
     INTERNAL_SCANNER_PATHS,
     is_self_scan,
     is_test_path,
     iter_workspace_files,
 )
-from prufgate.config import ConfigError, PrufGateConfig  # noqa: E402
+from prufgate.config import ConfigError, PrufGateConfig, _diff_base, _git  # noqa: E402
 from prufgate.contract_guard.dependency_guard import (  # noqa: E402
     Finding,
     WorkspaceManifests,
@@ -45,6 +50,7 @@ from prufgate.contract_guard.env_guard import (  # noqa: E402
     load_documented_env_vars,
     scan_file_env_drift,
 )
+from prufgate.contract_guard.ghost_symbols import scan_file_ghost_symbols  # noqa: E402
 from prufgate.contract_guard.registry_check import check_new_dependencies  # noqa: E402
 from prufgate.contract_guard.route_contract import (  # noqa: E402
     build_backend_api_index,
@@ -96,6 +102,33 @@ def _changed_files(workspace: Path, base: str | None = None) -> list[Path] | Non
     return [p for p in paths if p.is_file()]
 
 
+def _added_lines(workspace: Path, base: str | None) -> dict[str, set[int]]:
+    """{repository-relative path: added line numbers} against the merge base with `base`
+    (else HEAD). A changed file missing here (untracked, or committed in HEAD with a clean
+    tree) is treated as wholly added by the caller; a file whose diff adds no lines (a mode
+    change) maps to an empty set. Outside a repository there is no diff ({}); inside one,
+    a diff that cannot be computed raises GitDiffError: it must not pass."""
+    probe = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=workspace, capture_output=True, check=False)
+    if probe.returncode != 0 and base is None:
+        return {}
+    commit = _diff_base(base, workspace)
+    diff = _git(["diff", "-U0", "--no-color", "--no-ext-diff", "--relative", commit], workspace)
+    added: dict[str, set[int]] = {}
+    current = None
+    for line in diff.splitlines():
+        header = re.match(r"diff --git a/.* b/(.*)$", line)
+        if header:
+            current = added.setdefault(header.group(1), set())
+        elif line.startswith("+++ "):
+            current = added.setdefault(line[6:], set()) if line.startswith("+++ b/") else None
+        elif line.startswith("@@ ") and current is not None:
+            m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+            if m:
+                start, count = int(m.group(1)), int(m.group(2) or "1")
+                current.update(range(start, start + count))
+    return added
+
+
 def _iter_source_files(workspace: Path, changed_only: bool = False, base: str | None = None) -> list[Path]:
     if changed_only:
         changed = _changed_files(workspace, base)
@@ -109,6 +142,7 @@ def scan_contract_guard(
     changed_only: bool = False,
     config: PrufGateConfig | None = None,
     base: str | None = None,
+    ghost_third_party: bool = False,
 ) -> list[Finding]:
     """Run Ghost Dependency, Env Drift, and API Route Contract checks across `workspace`."""
     cfg = config or (PrufGateConfig.load(workspace, ref=base) if base or (workspace / ".prufgate").exists() else PrufGateConfig())
@@ -119,6 +153,8 @@ def scan_contract_guard(
     findings: list[Finding] = []
     candidate_files = _iter_source_files(workspace, changed_only=changed_only, base=base)
     self_scan = is_self_scan(workspace)
+    added_lines = _added_lines(workspace, base) if changed_only else {}
+    ghost_third_party = cfg.ghost_third_party or ghost_third_party
 
     for file_path in candidate_files:
         try:
@@ -143,6 +179,19 @@ def scan_contract_guard(
         # 2. Undocumented Environment Variable Drift (`undocumented-env-var-drift`)
         if documented_env is not None and not cfg.is_exempt(rel_path, "undocumented-env-var-drift"):
             findings.extend(scan_file_env_drift(file_path, content, workspace, documented_env, cfg))
+
+        # 2b. Ghost symbols: names the imported module does not define (`ghost-symbol`)
+        if not cfg.is_exempt(rel_path, "ghost-symbol"):
+            lines = content.splitlines()
+            findings.extend(
+                f
+                for f in scan_file_ghost_symbols(
+                    file_path, rel_path, content, workspace, added_lines.get(rel_path) if changed_only else None, ghost_third_party
+                )
+                if not inline_ignore.suppressed_at(
+                    lines, f.line, f.rule, engine="contract-guard", path=rel_path, severity=f.severity, message=f.message
+                )
+            )
 
         # 3. Frontend-to-Backend Route Mismatch (`frontend-backend-route-mismatch`)
         if api_index and not cfg.is_exempt(rel_path, "frontend-backend-route-mismatch"):
@@ -278,6 +327,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--base", default=None, help="Base ref for --changed (e.g. origin/main)")
     parser.add_argument("--json-out", default=None)
+    parser.add_argument(
+        "--ghost-third-party",
+        action="store_true",
+        help="Also check names imported from installed packages (reads their source, never imports them)",
+    )
     parser.add_argument("--config", default=None)
     parser.add_argument("--workspace", default=os.environ.get("WORKSPACE", str(Path.cwd())))
     args = parser.parse_args(raw_args)
@@ -289,7 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     base = args.base or (args.changed if isinstance(args.changed, str) else None)
     try:
         cfg = PrufGateConfig.load(workspace, args.config, ref=base)
-        findings = scan_contract_guard(workspace, changed_only=bool(args.changed), config=cfg, base=base)
+        findings = scan_contract_guard(
+            workspace, changed_only=bool(args.changed), config=cfg, base=base, ghost_third_party=args.ghost_third_party
+        )
     except ConfigError as e:
         print(f"contract_guard: {e}", file=sys.stderr)
         return 2

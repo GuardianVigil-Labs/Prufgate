@@ -80,6 +80,7 @@ CONFIDENCE: dict[str, str] = {
     "prufgate-config-base-invalid": HIGH,
     # Engine 4: contract guard
     "undeclared-or-hallucinated-import": MEDIUM,
+    "ghost-symbol": HIGH,
     "undocumented-env-var-drift": HIGH,
     "frontend-backend-route-mismatch": MEDIUM,
     "dependency-not-on-registry": HIGH,
@@ -92,6 +93,8 @@ CONFIDENCE: dict[str, str] = {
     "BOLA-UNAUTHENTICATED-ACCESS": HIGH,
     "BOLA-CROSS-TENANT-ACCESS": HIGH,
     "BOLA-PROBE-REDIRECT-REFUSED": HIGH,
+    "bfla-role-allowed": HIGH,
+    "bfla-allow-denied": MEDIUM,
     # Engine 6: diff reviewer (IDs from `inline_ignore.review_rule_id`)
     "pr-sql-injection-vector": MEDIUM,
     "pr-hardcoded-credential-in-code": MEDIUM,
@@ -104,6 +107,13 @@ CONFIDENCE: dict[str, str] = {
     "pr-server-action-missing-authorization-guard": MEDIUM,
     # prufgate verify --differential: base tests executed on the head code
     "differential-base-tests-fail": HIGH,
+    # prufgate verify --mutation: a mutant of a changed line survives the tests
+    "mutation-survivor": MEDIUM,
+    "mutation-no-coverage": MEDIUM,
+    # prufgate transcript: commands a coding agent ran
+    "transcript-history-lookup": MEDIUM,
+    "transcript-hook-bypass": HIGH,
+    "transcript-test-tamper-command": MEDIUM,
     # Gate plumbing and the built-in ast-grep rule
     "ignore-without-reason": HIGH,
     "action-authorization-guard": MEDIUM,

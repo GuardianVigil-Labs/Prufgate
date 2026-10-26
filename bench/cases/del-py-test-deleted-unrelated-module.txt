@@ -1,0 +1,19 @@
+-- label.yaml --
+category: deleted-test
+description: "A failing test file deleted alongside an unrelated module; the code it tests stays."
+must_fire: [diff-test-file-deleted]
+must_not_fire: []
+-- base/shop/ship.py --
+def ship_cost(kg):
+    return 5 + kg * 2
+-- base/shop/legacy_banner.py --
+BANNER = "Spring sale"
+-- base/tests/test_ship.py --
+from shop.ship import ship_cost
+
+
+def test_ship_cost():
+    assert ship_cost(1) == 7
+-- head/shop/ship.py --
+def ship_cost(kg):
+    return 4 + kg * 2

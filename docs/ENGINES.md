@@ -18,7 +18,7 @@ Languages: TypeScript, JavaScript (including `.vue` and `.svelte`), Python, Go, 
 |---|---|---|
 | `canned-error-fallback` | medium | A `catch` / `except` / `rescue` / `if err != nil` that returns a hard-coded success value. |
 | `route-canned-fallback` | medium | An API route that answers a failed upstream call with canned data. |
-| `unhandled-empty-catch` | medium | An error swallowed with nothing done about it. |
+| `unhandled-empty-catch` | medium | An error swallowed with nothing done about it: an empty JavaScript/TypeScript `catch`, or a Python `except:` / `except Exception:` whose body is only `pass`. |
 | `verdict-on-error-path`, `score-on-error-path` | medium | A decision or score produced on an error path. |
 | `score-outside-scoring` | medium | A score computed outside the files listed in `score_owners`. |
 | `simulated-return-value` | medium | A literal returned under a comment admitting it is simulated or a placeholder. |
@@ -46,13 +46,13 @@ Languages and frameworks: Python (pytest, unittest), JavaScript/TypeScript (Jest
 | `tautological-assertion` | high | `assert True`, `expect(true).toBe(true)`, `assertEqual(x, x)`, or an existence check as the only assertion. |
 | `self-mocked-unit-under-test` | medium | A test that mocks the module it is testing, or asserts a mock's own return value. |
 | `caught-and-ignored-test-exception` | medium | A test that catches the failure it should report. |
-| `snapshot-blind-update-or-empty` | high | Empty inline snapshots, or snapshots updated without review. |
+| `snapshot-blind-update-or-empty` | high | Empty or unfilled (`toMatchInlineSnapshot()`) inline snapshots, or snapshots updated without review. |
 | `diff-assertion-weakening` | medium | A diff that deletes assertions or widens what is accepted (for example `== 200` becoming `in (200, 500)`). |
 | `test-input-special-casing` | medium | A diff where production code gains a branch for the exact literal a test passes in. |
-| `diff-test-file-deleted` (P1) | high | A diff that deletes a test file whose tests are not added back anywhere. A git rename is not a deletion, nor is a file whose test names all reappear in another file (or, for languages whose test names are not read, a new test file of the same name). |
-| `diff-test-count-drop` (P1) | medium | A diff that removes more test cases than it adds, counted across every file: Python `def test_*` (functions and unittest methods), JavaScript/TypeScript `it(`/`test(` with a string title, Go `func Test*` (not `TestMain`). A test that is renamed or moved to another file keeps the count. Tests in a deleted file already reported by `diff-test-file-deleted` are not counted twice. |
+| `diff-test-file-deleted` (P1) | high | A diff that deletes a test file whose tests are not added back anywhere. A git rename is not a deletion, nor is a file whose test names all reappear in another file (or, for languages whose test names are not read, a new test file of the same name). A test retired with its feature is not reported either: one that imports a production module the same diff deletes (Python imports, relative JavaScript/TypeScript imports, or for Go a deleted non-test file in the same package directory). |
+| `diff-test-count-drop` (P1) | medium | A diff that removes more test cases than it adds, counted across every file: Python `def test_*` (functions and unittest methods), JavaScript/TypeScript `it(`/`test(` with a string title, Go `func Test*` (not `TestMain`). A parametrised test counts once per case: `@pytest.mark.parametrize` with a literal list (stacked decorators multiply), `it.each([...])` / `test.each([...])` with an array, and a Go test running a literal table with `t.Run`; cutting cases from one lowers the count. A test that is renamed or moved to another file keeps the count. Tests in a deleted file already reported by `diff-test-file-deleted` are not counted twice. |
 
-The two removal rules see only the diff. When a removal is intended (the feature is gone, or tests were merged into a parametrised one), acknowledge it with an `exempt` entry for the path and rule, with a reason; engine 3 reports the new exemption as `prufgate-config-self-exemption`, so the reviewer sees it. Remove the entry once the change has merged:
+The two removal rules see only the diff. When a removal is intended and not recognised above (for example cases moved into a list held in a variable), acknowledge it with an `exempt` entry for the path and rule, with a reason; engine 3 reports the new exemption as `prufgate-config-self-exemption`, so the reviewer sees it. Remove the entry once the change has merged:
 
 ```yaml
 exempt:
@@ -77,7 +77,7 @@ exempt:
 | `unsafe-type-cast-cascade` | high | `as unknown as T`, `as any`, `cast(Any, ...)`, unjustified `unsafe` blocks. |
 | `linter-or-ci-config-weakening` | medium | Linter and type-checker config compared by value with the base (TOML: `ruff.toml`, `.ruff.toml`, `pyproject.toml` `[tool.ruff]` / `[tool.mypy]`; JSON or JSONC: `tsconfig*.json`, `biome.json(c)`, `.eslintrc(.json)`; YAML: `.golangci.yml`, `.eslintrc.yml`), wherever the entry sits in the file: new `ignore`, `extend-ignore`, `exclude`, `extend-exclude`, `disable`, `ignorePatterns`, `exclude-dirs`, `exclude-rules` or golangci `exclusions` entries; new `per-file-ignores` / `extend-per-file-ignores` keys or new codes under an existing key; entries removed from `select`, `extend-select` or `enable`; a strictness flag set to its lax value (`strict`, `noImplicitAny`, `disallow_untyped_defs`, `ignore_errors = true` including inside an existing `[[tool.mypy.overrides]]` block, `recommended: false`, `disable-all: true`; `skipLibCheck: true` is P2) or an explicit strict value removed; an eslint or biome rule turned `off` / `0`, also inside `overrides`. A tsconfig `exclude` counts only for source or test paths (`src`, `tests`, `*.test.*`), not build output. The message names the entries. A new config file is compared with an empty one; tightening is not flagged. Without a base (a diff file), for files that cannot be parsed at either side (INI files, JavaScript configs, invalid syntax) and for TOML on Python 3.9 and 3.10 (no `tomllib`), each added line is matched instead: `"strict": false`, `ignore = [`, rules turned off. In CI config: `continue-on-error: true`, `allow_failure: true`, `\|\| true`. |
 | `coverage-threshold-lowering` | high | A lowered `fail_under` or Jest/Vitest coverage threshold. |
-| `prufgate-config-self-exemption` | high | The configuration in effect loosened compared with the base, compared by value (any YAML spelling, location or shadowing file): new exclusions, exemptions, known debt or higher ceilings, dropped packs, fewer languages, more auth guards, tenant keys, score owners or evidence markers, low-confidence rules or the registry check turned off, or `registry_check.offline_ok` turned on (P1); an exclusion covering every file or the config itself, such as `**` (P0). The config under review cannot exclude, exempt or set a debt ceiling for this finding. Without a base (a diff file), the diff lines of the config are checked instead. With a base ref the branch's config is not applied at all (every engine uses the base's), and the finding says so. |
+| `prufgate-config-self-exemption` | high | The configuration in effect loosened compared with the base, compared by value (any YAML spelling, location or shadowing file): new exclusions, exemptions, known debt or higher ceilings, dropped packs, fewer languages, more auth guards, tenant keys, score owners or evidence markers, low-confidence rules, the registry check or the third-party ghost-symbol check turned off, or `registry_check.offline_ok` turned on (P1); an exclusion covering every file or the config itself, such as `**` (P0). The config under review cannot exclude, exempt or set a debt ceiling for this finding. Without a base (a diff file), the diff lines of the config are checked instead. With a base ref the branch's config is not applied at all (every engine uses the base's), and the finding says so. |
 | `prufgate-config-not-applied` | high | P2, informational: with a base ref, the change edits or introduces the PrufGate configuration or baseline. The run applied the base's (or the defaults) and ignored the branch's: configuration changes take effect after merge. |
 | `prufgate-config-base-invalid` | high | P2, informational: this version rejects the configuration at the base, so the run applied the branch's (which must be valid). The diff lines of the configuration are still checked. |
 
@@ -90,8 +90,19 @@ An issue reference is `#123`, `ABC-123` or an issue URL. Acronyms such as `UTF-8
 | Rule | Confidence | What it flags |
 |---|---|---|
 | `undeclared-or-hallucinated-import` | medium | An import of a package declared in none of `package.json`, `pyproject.toml` (dependency tables only), `requirements*.txt` / `requirements/`, `go.mod`, `Cargo.toml`. Standard-library modules, relative imports and local packages are not flagged. A hallucinated or typo-squatted name is how a malicious package gets installed. |
+| `ghost-symbol` | high | A name that its module does not define: `from shop.billing import charge_card` when `shop/billing.py` has no `charge_card`, a call such as `billing.charge_card(...)` on an imported module, or `import { charge } from "./billing"` when `./billing.ts` exports no `charge`. A hallucinated API. P1. See [ghost symbols](#ghost-symbols). |
 | `undocumented-env-var-drift` | high | `process.env.X`, `os.environ["X"]` / `os.getenv("X")` without a default, `os.Getenv("X")`, `env!("X")`, when `X` is missing from `.env.example` (or `.env.sample`, `.env.template`) and from every config schema and deploy manifest (below). |
 | `frontend-backend-route-mismatch` | medium | `fetch("/api/...")` / `axios.*("/api/...")` to a path that no backend route or OpenAPI spec defines. |
+
+### Ghost symbols
+
+With `--changed`, only added lines are checked (against the merge base with the base ref, otherwise `HEAD`; an untracked file counts as wholly added). A full scan checks every line. Nothing from the scanned repository or from an installed package is imported or run: modules are located with `importlib.machinery.PathFinder.find_spec`, which unlike `importlib.util.find_spec` never imports a parent package, and read with `ast`.
+
+- **Python in the repository.** Absolute imports resolve from the repository root, `src/` and the importing file's folder; relative imports from the file's package. A name counts as defined when the module has a top-level `def`, `class`, assignment, import or `__all__` entry for it, including inside `if`/`try` blocks (both branches count), or a submodule of that name. `module.attr(...)` is checked for modules bound by `import a.b`, `import a.b as m` or `from a import b`, unless the name is bound again anywhere in the file.
+- **Third-party Python (opt-in).** `ghost_symbols: {third_party: true}` in the configuration, or `--ghost-third-party` on `prufgate/contract_guard/__init__.py`, also checks packages installed in the environment of the interpreter running PrufGate (standard-library modules are not checked). A `.pyi` stub beside a module is read in preference to its source. The result depends on that environment, so CI must install the project's dependencies before the gate runs; a package that is not installed is not checked.
+- **TypeScript/JavaScript in the repository.** `import { a, b as c, type D } from "./relative"` resolves `.ts`, `.tsx`, `.mts`, `.cts`, `.d.ts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `index.*` and `./x.js` written for `x.ts`. Exports are read from `export function/class/const/let/var/type/interface/enum/namespace`, `export { a, b as c }` and `export * as ns from`, following `export * from "./other"`.
+
+Unknown is never a finding: a star import, a module-level `__getattr__`, `globals()`/`vars()` in the module, a namespace package, a compiled module without a stub, a module outside the repository (third-party mode off), CommonJS exports (`module.exports`, `exports.x`, `export =`), `export * from` a package or a file that cannot be resolved, and import paths through aliases (`@/lib`) all produce nothing.
 
 ### Where environment variables count as documented
 
@@ -160,6 +171,8 @@ Static analysis discovers routes in OpenAPI specs, Express/Fastify, NestJS, Next
 | `BOLA-TABLE-MISSING-TENANT-COLUMN` | low | A `CREATE TABLE` in a migration with no tenant or owner column. Tables shared by every tenant are skipped only when listed in `bola.global_tables`; PrufGate does not guess which tables are lookup tables. |
 | `BOLA-UNAUTHENTICATED-ACCESS`, `BOLA-CROSS-TENANT-ACCESS` | high | Live probing: a response that leaks without a token or across tenants. |
 | `BOLA-PROBE-REDIRECT-REFUSED` | high | Live probing: a redirect to another origin, not followed. |
+| `bfla-role-allowed` | high | Role matrix: a role the matrix denies got a 2xx (P0). |
+| `bfla-allow-denied` | medium | Role matrix: a role the matrix allows got 401/403, so the matrix may be stale (P3, advisory). |
 
 Add your own guards and tenant keys with `auth_guards` and `tenant_keys`.
 
@@ -180,6 +193,21 @@ Not resolved (findings may be missed or reported falsely): auth applied after th
 **Live probing** (optional, only against systems you are authorised to test) sends each discovered route as an unauthenticated request, as user A, and as user A for user B's resource (and the reverse). It reports responses that leak across tenants, with `curl` reproductions that use `$PRUFGATE_TOKEN_A` / `$PRUFGATE_TOKEN_B` placeholders. Redirects are followed only within the target's origin; a redirect elsewhere is not followed, so the tokens never leave that origin, and is reported as `BOLA-PROBE-REDIRECT-REFUSED` (P1). See [GETTING_STARTED.md](GETTING_STARTED.md#live-bola-probing).
 
 **Route sources.** Live probing uses the routes found in your source code plus `PRUFGATE_BOLA_PATHS`. Add your own API description with `--routes-from FILE` (repeatable): an OpenAPI 3.x or Swagger 2 document (YAML or JSON), a Postman collection v2.1 or a HAR export. Only the method and URL path of each entry are read; hosts, headers, cookies, bodies, query strings, auth blocks and variables are ignored. Only GET and HEAD entries are kept, and the others are counted as skipped. Every path is probed on `--url`, joined exactly like a `PRUFGATE_BOLA_PATHS` entry. Path parameters take the document's `example` or `default` value; without one they become the tenant placeholder and join the cross-tenant probes, like a discovered `{id}` route. Paths already known are dropped, and at most `--max-routes N` (default 200) new paths are added. A file that cannot be read or parsed, is over 5 MB, or uses YAML aliases (`*name`, which can expand without bound) stops the run with exit 2.
+
+**Role matrix.** `prufgate bola PATH --url URL --roles FILE` checks function-level authorisation (OWASP API5) with test accounts you create yourself. The file lists your roles and which of them may call each route:
+
+```yaml
+roles:
+  admin: { token_env: PRUFGATE_ROLE_ADMIN }
+  member: { token_env: PRUFGATE_ROLE_MEMBER }
+  anonymous: {}
+routes:
+  - { path: /api/admin/users, allow: [admin] }
+  - { path: /api/reports/export, allow: [admin, member] }
+  - { path: /api/admin/health, method: HEAD, allow: [admin] }
+```
+
+Each route is sent once per role, as a GET (or HEAD with `method: HEAD`), to `--url` plus the path, instead of the two-token probe; the same target check and timeout apply. Redirects are never followed: a 3xx counts as a denial, since a denied role is often sent to a login page that answers 200. A 2xx for a role not in `allow` is `bfla-role-allowed` (P0); a 3xx, 401 or 403 for a role in `allow` is `bfla-allow-denied` (P3). Tokens are read only from the named environment variables, sent as `Authorization: Bearer`, and never printed: PoCs use `$PRUFGATE_ROLE_ADMIN`-style placeholders. Only GET and HEAD are accepted; a path must start with `/` and must not contain `//`, a scheme, a backslash or `.`/`..` segments. The file is read as safe YAML with the same 5 MB cap and alias refusal as `--routes-from`. A malformed file, another method, a bad path, an unset environment variable, more routes than `--max-routes`, or a request that cannot connect stops the run with exit 2.
 
 ## Engine 6: diff reviewer
 
@@ -222,6 +250,54 @@ The test command comes from `--test-cmd` (split like a shell command line, but r
 Each run has a timeout (`--timeout`, default 600 seconds); on expiry the whole process group is killed and the command exits 2. The output goes to a file, so a child that keeps it open cannot hold the run past its timeout. The tests get a reduced environment: `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM` (and `SYSTEMROOT` on Windows), plus `CI=1` and `PRUFGATE_JUNIT_XML`. Tokens, API keys and cloud credentials in your environment are not passed; name any variable the tests really need with `--pass-env NAME`. A reduced environment is not isolation: the tests can still read files your user can read, which is why this belongs in a sandbox.
 
 Output formats are `text`, `json` and `sarif`, as for `check`. Exit codes: 0 clean, 1 a base test fails on the head code, 2 refused, no test command, no base ref, head tests failing, timeout or any other error.
+
+## Mutation smoke test (opt-in, runs repository code)
+
+`prufgate verify --mutation` catches tests that were hollow from the start. A test that calls the code but checks nothing passes on the base and on the head, so no diff check sees it. Mutating the lines the branch changed does: when a mutant (a flipped comparison, a removed call, a replaced return value) survives, no test fails when that line does the wrong thing.
+
+**This executes code from the repository under review**, exactly like `--differential`, and is contained the same way (`prufgate/repo_runner.py`): it refuses to start (exit 2) without `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1`; it runs in a temporary detached worktree of the committed `HEAD` that is always removed (also after a timeout, SIGTERM or SIGINT, and a worktree left by a killed run is pruned by the next one); the tool gets the same reduced environment (`--pass-env NAME` adds a variable); the whole process group is killed at `--timeout`; and on Linux no detached descendant survives. It is never part of `check`, the batteries, the GitHub Action, the MCP server, the API or the hooks. Run it only in a sandbox or a disposable CI job.
+
+PrufGate does not mutate code itself and **never installs anything**. It uses a mutation tool already on `PATH`, picked per language of the changed files (or named with `--tool`):
+
+| Language | Tool (`--tool`) | Restricted to | Report read |
+|---|---|---|---|
+| Python | `mutmut` (3.x) | mutants of the changed modules (`mutmut run "<module>.*"`) | `mutants/<file>.meta`, and `mutmut show` for each survivor's line and change |
+| JavaScript, TypeScript | `stryker` | the changed line ranges (`--mutate file:start-end`) | `reports/mutation/mutation.json` (`--reporters json`) |
+| Java (Maven) | `pit` | the changed classes (`-DtargetClasses`), Maven offline (`-o`) | `pit-reports/mutations.xml` (`-DoutputFormats=XML`) |
+| Go | `gremlins`, else `go-mutesting` | gremlins: the diff against the merge base (`--diff`); go-mutesting: the changed files | gremlins `--output` JSON; go-mutesting `report.json` (the avito-tech fork, `json_output`) |
+| Rust | `cargo-mutants` | the diff against the merge base (`--in-diff`) | `mutants.out/outcomes.json` |
+
+When a changed file's language has no tool installed, it exits 2 and names what to install. PIT runs Maven offline, so a pitest plugin that is not already in the local Maven repository is an error, not a download. The temporary worktree holds tracked files only, so a tool that needs installed dependencies (`node_modules`, a virtualenv) finds those on `PATH` or in your home directory, not in the worktree.
+
+How it runs:
+
+1. The comparison base is `git merge-base <base> HEAD`. The changed lines are the lines `HEAD` adds or changes in production files; test files, test helpers and test-runner configuration are never mutated. With no changed production line it exits 0 without running anything.
+2. Report paths committed in the repository (`mutants/`, `reports/mutation/`, `pit-reports/`, go-mutesting's `report.json`) are deleted first, so only a report this run writes is read; one reached through a committed symlink out of the worktree is an error. The tool runs in the worktree, restricted as in the table, within `--timeout` seconds for the whole run (default 1800). `--max-mutants N` (default 200) is passed where the tool has a cap (PIT's `CLASSLIMIT`); the other tools are bounded by the restriction to the change and by `--timeout`. On expiry everything is killed and the command exits 2.
+3. Its report is read. A surviving mutant on a changed line is a `mutation-survivor` finding (P1, medium confidence) with the line and the mutation; a mutant no test runs is a `mutation-no-coverage` finding (P1, medium confidence). Killed and timed-out mutants on changed lines are summarised; mutants on other lines are counted and ignored. A tool that exits non-zero (except cargo-mutants' 2 and 3, missed mutants and timeouts), writes no report, or reports no mutant on any changed line is an error (exit 2), never a pass. A failing threshold in the tool's own configuration (Stryker's `thresholds.break`, PIT's `mutationThreshold`) is therefore an error too.
+
+mutmut mutates whole functions; a survivor's line is the function's line plus the offset of the change in `mutmut show`, and the other outcomes count on the function's first changed line. Medium confidence because an equivalent mutant (one that changes nothing observable) survives every test.
+
+Output formats are `text`, `json` and `sarif`. Exit codes: 0 no survivor or uncovered mutant on a changed line, 1 one of those, 2 refused, no tool, no base ref, timeout, no report or any other error.
+
+## Agent transcripts
+
+`prufgate transcript FILE` reads a coding agent's session transcript after the run and reports the commands it ran to copy an answer or get past checks. Nothing in the transcript is executed.
+
+| Rule | Confidence | What it reports |
+|---|---|---|
+| `transcript-history-lookup` | medium | `git log --all` / `--branches` / `--remotes` / `-g`, `git reflog`, `git cat-file` on anything but HEAD, `git checkout` / `switch` / `restore --source` to a branch or tag other than the default, and `git show <branch-or-tag>:path` or `git diff <branch-or-tag>` (`origin/...`, a tag like `v1.2.0`, or a name before `--`). Also `git cherry-pick`, `merge`, `grep`, `archive`, `ls-tree` and `worktree add` with another branch or tag, and `$(git rev-parse <branch>)` handed to any command. Ordinary development is not reported: every `git stash` command, a commit hash, `HEAD~n`, ranges such as `<hash>...HEAD`, and the default branch (`main`, `master`, `develop`, `origin/main`, `origin/master`, `origin/HEAD`, `@{upstream}`). |
+| `transcript-hook-bypass` | high | `--no-verify`, `git commit -n`, `core.hooksPath`, `HUSKY=0`: what the [shell guard](AGENT_HOOKS.md) blocks, with the same parser. |
+| `transcript-test-tamper-command` | medium | Removing or moving tests, test directories or CI configuration (the shell guard's protected paths), and editing CI configuration with a redirection, `sed -i`, `tee` or `cp`. |
+
+A branch name with a slash (`feature/x`) after `git checkout` is read as a path and not reported; `git switch` and remote-tracking names (`origin/...`) are. Only real shell commands are read, with the shell guard's parser: here-document bodies, `python3 -c` scripts and quoted arguments of other commands are never taken for git commands; `bash -c '...'` is read.
+
+Formats are detected from the content; `--format-in claude|codex|text` overrides it:
+
+- `claude`: Claude Code session JSONL (`~/.claude/projects/`), `tool_use` blocks named `Bash` with `input.command`.
+- `codex`: Codex CLI rollout JSONL (`~/.codex/sessions/`): `response_item` payloads of type `function_call` (`command` or `cmd` in the arguments) and `local_shell_call`; also the event stream of `codex exec --json` (`command_execution` items).
+- `text`: a shell log; each line starting `$ ` is a command, optionally after a `[timestamp]`.
+
+Each finding names the transcript line and, when the transcript has one, the timestamp. Commands are redacted (token shapes, secret-named assignments, values of secret environment variables; `/home/<user>/` and `/Users/<user>/` become `.../`) and cut to 300 characters before they are printed. Output formats: `text`, `json`, `sarif`. Exit codes: 0 nothing found, 1 a finding (every rule is P1), 2 the file cannot be read, is larger than 64 MiB, has a malformed JSON line or is in no known format.
 
 ## The gate's extra tools
 

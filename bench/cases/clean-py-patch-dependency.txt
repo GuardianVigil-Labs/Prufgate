@@ -1,0 +1,28 @@
+-- label.yaml --
+category: clean
+description: "A test patches the rate lookup the function under test depends on, not the function itself."
+must_fire: []
+must_not_fire: [self-mocked-unit-under-test]
+-- base/shop/tax.py --
+def rate_for(region):
+    raise LookupError(region)
+
+
+def tax(amount, region):
+    return round(amount * rate_for(region), 2)
+-- head/shop/tax.py --
+def rate_for(region):
+    raise LookupError(region)
+
+
+def tax(amount, region):
+    return round(amount * rate_for(region), 2)
+-- head/tests/test_tax.py --
+from unittest.mock import patch
+
+from shop import tax
+
+
+def test_tax():
+    with patch("shop.tax.rate_for", return_value=0.2):
+        assert tax.tax(10, "eu") == 2.0

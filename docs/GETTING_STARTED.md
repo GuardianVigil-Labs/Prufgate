@@ -35,7 +35,9 @@ prufgate full                     same as: prufgate check
 prufgate test-audit [PATH] [--changed] [--base REF] [--config FILE] [--json-out FILE]
 prufgate bola [PATH] [--static-only] [--url URL --token-a T --token-b T --tenant-a ID --tenant-b ID] [--base REF] [--format text|json]
 prufgate review [--workspace PATH] [--base REF] [--diff-file FILE] [--format markdown|json|sarif|github|reviewdog|gitlab|junit] [--ai --ai-provider NAME]
+prufgate fix [PATH] [--base REF] [--format patch|github-suggestions] [--apply [--force]]
 prufgate verify --differential [PATH] --allow-run-tests [--base REF] [--test-cmd CMD] [--timeout SECONDS] [--pass-env NAME] [--format text|json|sarif]
+prufgate verify --mutation [PATH] --allow-run-tests [--base REF] [--tool NAME] [--max-mutants N] [--timeout SECONDS] [--pass-env NAME] [--format text|json|sarif]
 prufgate init [PATH] [--hooks] [--overwrite]
 prufgate shell-guard              Claude Code PreToolUse hook: hook JSON on stdin, exit 2 blocks
 prufgate base-ref [PATH]          print the base ref the changed scope would use (exit 2 if none is usable)
@@ -48,7 +50,9 @@ prufgate --self-check | --version | --help
 - **`prufgate test-audit`** runs engine 2 alone.
 - **`prufgate bola`** runs engine 5. It is static only unless you give a URL and two tokens: see [live probing](#live-bola-probing).
 - **`prufgate review`** runs engine 6 on a diff. It is deterministic by default; `--ai` hands the changed hunks to an AI CLI or API you have configured (see [ENGINES.md](ENGINES.md#engine-6-diff-reviewer)).
+- **`prufgate fix`** proposes deterministic fixes for safe findings: see [auto-fix](#auto-fix-prufgate-fix).
 - **`prufgate verify --differential`** runs the base branch's tests against the head code. **It executes the repository's tests**, so it refuses to run without `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1`; run it only in a sandbox or a disposable CI job. See [ENGINES.md](ENGINES.md#differential-test-verification-opt-in-runs-repository-code).
+- **`prufgate verify --mutation`** mutates the lines the branch changed with a mutation tool you already have installed (mutmut, Stryker, PIT, gremlins, go-mutesting or cargo-mutants) and reports each surviving mutant. It runs the repository's tests, so it has the same opt-in. See [ENGINES.md](ENGINES.md#mutation-smoke-test-opt-in-runs-repository-code).
 - **`prufgate init`** writes a starter `.prufgate/config.yaml`. With `--hooks` it also writes the coding-agent hooks described in [CI_INTEGRATION.md](CI_INTEGRATION.md#coding-agent-hooks).
 - **`prufgate shell-guard`** is the shell-command guard those hooks run before an agent's shell command: see [the shell guard](CI_INTEGRATION.md#shell-command-guard).
 
@@ -63,6 +67,24 @@ With `--changed`, PrufGate compares against a base ref and includes uncommitted 
 5. on a clean working tree only: `HEAD~1`
 
 A candidate the branch is not ahead of (for example `origin/HEAD` right after a pull) is skipped. A base ref that does not exist, or no usable base on a clean tree (often a shallow clone), is an error (exit 2), never "nothing changed". `prufgate base-ref` shows which base would be used. In CI, check out with full history (`fetch-depth: 0`).
+
+## Auto-fix: `prufgate fix`
+
+`prufgate fix --base REF` prints a unified diff of fixes to stdout and changes nothing. Pipe it to `git apply`, or pass `--apply` to write it. `--format github-suggestions` prints the fixes as GitHub suggestion blocks, in the same shape as `prufgate review --format github`, so a reviewer accepts each one with a click.
+
+Only these findings get a fix, and only on lines the branch adds against the base:
+
+| Finding | Fix |
+|---|---|
+| A focus filter (`it.only`, `describe.only`, `test.only`, `fit`, `fdescribe`) | Remove `.only` or the `f` prefix. |
+| An unjustified skip (`it.skip`, `xit`, a bare `@pytest.mark.skip`, `t.Skip()`) | Remove it, back to the base line. |
+| `diff-assertion-weakening` | Restore the exact base lines, when the hunk only deletes assertions or replaces them one for one. |
+| A suppression comment without a reason (`ignore-without-reason`, a bare `noqa`, `@ts-ignore`, ...) | Remove the comment. A reason is never invented. |
+| `\|\| true` or `continue-on-error: true` in a CI workflow | Remove it. |
+
+Everything else is listed on stderr as `no safe fix`. Each fix must match the expected text exactly, and is kept only when its rule stops firing once it is applied; anything ambiguous (two matches on one line, a comment marker that may sit inside a string, a hunk that changes more than assertions) gets no fix.
+
+`--apply` writes only files inside the repository, never through a symlink, and refuses a file with uncommitted changes (exit 2) unless `--force`, which applies a fix only where its line still matches. Running it again after a successful apply changes nothing.
 
 ## Exit codes
 

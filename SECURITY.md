@@ -42,7 +42,7 @@ Out of scope:
 - **Scans through the API are confined to `PRUFGATE_WORKSPACE_ROOT`.** A workspace that resolves outside it, including through a symlink, is refused.
 - **Webhooks are off until `PRUFGATE_WEBHOOK_SECRET` is set**, and every delivery must carry a valid GitHub `X-Hub-Signature-256` or GitLab `X-Gitlab-Token`.
 - **Repository hook scripts (`.prufgate/hooks/`) never run unless `PRUFGATE_ALLOW_REPO_HOOKS=1`.** Leave it unset in CI jobs that scan pull requests from forks.
-- **`prufgate verify --differential` executes the repository's tests** and refuses to start without `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1`. No other command, battery, hook, MCP tool or API route runs it. Use it only in a sandbox or disposable CI job.
+- **`prufgate verify --differential` and `prufgate verify --mutation` execute the repository's tests** (`--mutation` through a mutation tool already installed; PrufGate never installs one) and refuse to start without `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1`. No other command, battery, hook, MCP tool or API route runs them. They run in a temporary worktree with a reduced environment and a timeout, but that is not isolation: use them only in a sandbox or disposable CI job.
 
 ## Verify a release
 

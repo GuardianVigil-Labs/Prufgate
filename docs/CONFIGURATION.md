@@ -32,6 +32,7 @@ When a run compares against a base ref (`prufgate check --changed` or `--base`, 
 | `exempt` | see below | none | Per-path rule exemptions, each with a reason. |
 | `known_debt` | see below | none | Ratcheting ceilings for rules you cannot fix yet. |
 | `registry_check` | `true`, `false` or a mapping | `false` | Look up dependencies added in the diff on their public registry (engine 4). See [registry check](#registry-check). |
+| `ghost_symbols` | mapping | `{third_party: false}` | `third_party: true` also checks names imported from installed Python packages for `ghost-symbol` (engine 4). CI must install the dependencies first. See [ENGINES.md](ENGINES.md#ghost-symbols). |
 | `enable_low_confidence` | boolean | `false` | Turn on low-confidence rules. See [confidence](#confidence). |
 | `ai_adjudicate` | `true`, `false` or a mapping | `false` | Let an AI provider dismiss low-confidence findings it judges not real. See [AI adjudication](#ai-adjudication). |
 
@@ -167,7 +168,7 @@ Engine 3 reports a diff that adds a new exemption, debt entry or score owner to 
 | `PRUFGATE_TEST_PROBE_TOKEN_A`, `_B` | engine 5 | Bearer tokens for live probing. |
 | `PRUFGATE_TEST_PROBE_TENANT_A_ID`, `_B_ID` | engine 5 | Tenant IDs for live probing. |
 | `PRUFGATE_ALLOW_REPO_HOOKS` | gate | `1` runs the scanned repository's `.prufgate/hooks/` scripts. Off by default: they are code from the repository under review. |
-| `PRUFGATE_ALLOW_RUN_TESTS` | `verify` | `1` lets `prufgate verify --differential` run the repository's tests, as `--allow-run-tests` does. Off by default: the tests are code from the repository under review. Set it only in a sandbox or disposable CI job. |
+| `PRUFGATE_ALLOW_RUN_TESTS` | `verify` | `1` lets `prufgate verify --differential` and `--mutation` run the repository's tests, as `--allow-run-tests` does. Off by default: the tests are code from the repository under review. Set it only in a sandbox or disposable CI job. |
 | `PRUFGATE_INFO_URI` | reports | The `informationUri` written into SARIF. |
 | `PRUFGATE_AI_MODEL` | engine 6 | Model name for `--ai` with an API provider. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST` | engine 6 | Providers for `prufgate review --ai` and AI adjudication. Never written to output. |

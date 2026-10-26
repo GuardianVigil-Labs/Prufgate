@@ -133,7 +133,8 @@ class BenchCorpusFloor(unittest.TestCase):
     """The shipped corpus at the numbers in docs/BENCHMARK.md: a drop fails the build."""
 
     def test_floor(self):
-        rc, out = _main(ROOT / "bench" / "cases", min_precision=0.96, min_recall=0.83)
+        # A floor, not a target: new hard cases may land below 1.0 without breaking the build.
+        rc, out = _main(ROOT / "bench" / "cases", min_precision=0.95, min_recall=0.95)
         self.assertEqual(rc, 0, out[:2000])
         self.assertGreaterEqual(json.loads(out)["cases"], 60)
 

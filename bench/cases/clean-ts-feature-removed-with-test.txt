@@ -1,0 +1,17 @@
+-- label.yaml --
+category: clean
+description: "A retired gift-wrap option removed together with its Jest test."
+must_fire: []
+must_not_fire: [diff-test-file-deleted, diff-test-count-drop]
+-- base/src/giftwrap.ts --
+export const giftWrapFee = (items: number) => items * 2;
+-- base/src/giftwrap.test.ts --
+import { giftWrapFee } from "./giftwrap";
+
+test("charges per item", () => {
+  expect(giftWrapFee(3)).toBe(6);
+});
+-- base/src/cart.ts --
+export const total = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+-- head/src/cart.ts --
+export const total = (xs: number[]) => xs.reduce((a, b) => a + b, 0);

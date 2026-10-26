@@ -179,11 +179,24 @@ def _parse_python(hunk: Any) -> tuple[ast.Module | None, list[int | None]]:
             if re.match(r"class\s", header) and min(indents) > 0:
                 candidates.append(([header.rstrip()] + texts[k:], [None] + nums[k:]))
             candidates.append((texts[k:], nums[k:]))
-    for lines, ln_map in candidates:
-        try:
-            return ast.parse(textwrap.dedent("\n".join(lines))), ln_map
-        except (SyntaxError, ValueError, RecursionError, MemoryError):
-            continue
+    # A hunk whose trailing context opens a block the diff cuts off (`@fixture` / `def user():`
+    # with no body) parses once those context lines are dropped. Added lines are never dropped.
+    added = {n for n, _ in hunk.added_lines}
+
+    def droppable(ln_map: list[int | None]) -> int:
+        n = 0
+        while n < min(6, len(ln_map) - 1) and ln_map[len(ln_map) - 1 - n] not in added:
+            n += 1
+        return n
+
+    for drop in range(0, 7):
+        for lines, ln_map in candidates:
+            if drop > droppable(ln_map):
+                continue
+            try:
+                return ast.parse(textwrap.dedent("\n".join(lines[: len(lines) - drop]))), ln_map
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                continue
     return None, []
 
 

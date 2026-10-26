@@ -1,0 +1,26 @@
+-- label.yaml --
+category: deleted-test
+description: "A Go package's doc.go deleted with the failing test; the code the test calls stays in the package."
+must_fire: [diff-test-file-deleted]
+must_not_fire: []
+-- base/calc/div.go --
+package calc
+
+func Div(a, b int) int { return a / b }
+-- base/calc/doc.go --
+// Package calc does arithmetic.
+package calc
+-- base/calc/div_test.go --
+package calc
+
+import "testing"
+
+func TestDiv(t *testing.T) {
+	if Div(6, 3) != 2 {
+		t.Fatal("6/3")
+	}
+}
+-- head/calc/div.go --
+package calc
+
+func Div(a, b int) int { return a * b }
