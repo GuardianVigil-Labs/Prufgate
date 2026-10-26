@@ -15,6 +15,10 @@ underlying defect:
      Not flagged: `sys.exit(main())`, exits under `if __name__ == "__main__":`, exits a test
      expects (inside `with pytest.raises(SystemExit):` or `expect(() => ...)`), and exits in
      helpers of fixture scripts that no test, hook or fixture calls (see fake_exit.py).
+  1d. test-runner-monkeypatch (P0), always-true-equality (P1), pytest-result-rewrite (P0),
+     pytest-collection-deselect (P1), test-config-weakening (P1), test-script-neutered (P0):
+     edits to the test runner, its assertions, conftest hooks, test config or the test
+     command that make checks pass (see harness_edits.py).
   2. suppression-comment-smuggling (P1): Added lines introducing `@ts-ignore`,
      `@ts-expect-error` (without explanation), `eslint-disable`, `biome-ignore`,
      `# noqa`, `# type: ignore`, `// nolint`, `#[allow(`, `@SuppressWarnings`, or
@@ -79,9 +83,11 @@ from prufgate.config import (  # noqa: E402
     BaseConfigNotAFile,
     ConfigError,
     PrufGateConfig,
+    _git,
+    git_blob,
     path_matches_pattern,
 )
-from prufgate.diff_guard import fake_exit  # noqa: E402
+from prufgate.diff_guard import fake_exit, harness_edits, linter_drift  # noqa: E402
 
 
 @dataclass
@@ -487,6 +493,79 @@ def with_config_drift(
     return kept + drift + not_a_file
 
 
+LINTER_RULE = "linter-or-ci-config-weakening"
+TEST_CONFIG_RULE = "test-config-weakening"
+
+
+def with_linter_drift(
+    findings: list[Finding],
+    diff_text: str,
+    root: Path,
+    base_ref: str | None,
+    cfg: PrufGateConfig,
+) -> list[Finding]:
+    """Replace the line-based linter-config and test-runner-config findings with a
+    by-value comparison of each changed config against the base (an empty config
+    when the file is new). Files that cannot be parsed at either side, and runs
+    with no base, keep the line-based findings."""
+    try:
+        base_commit = _diff_base(base_ref, root)
+        top = Path(_git(["rev-parse", "--show-toplevel"], root).strip())
+    except GitDiffError:
+        return findings
+    added: dict[str, list[tuple[int, str]]] = {}
+    for h in parse_unified_diff(diff_text):
+        if not h.is_deleted_file:
+            added.setdefault(h.file_path.replace("\\", "/"), []).extend(h.added_lines)
+    for rel, lines in sorted(added.items()):
+        if cfg.is_excluded(rel):
+            continue
+        # Test-runner settings: the same swap, for `test-config-weakening`.
+        if harness_edits.config_kind(rel) and not cfg.is_exempt(rel, TEST_CONFIG_RULE):
+            try:
+                tc = harness_edits.compare_config(rel, git_blob(base_commit, rel, top), (top / rel).read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, GitDiffError):
+                tc = None
+            if tc is not None:
+                findings = [f for f in findings if not (f.rule == TEST_CONFIG_RULE and f.path == rel)]
+                for why, needle in tc:
+                    ln, text = next(((n, t) for n, t in lines if needle in t), lines[0] if lines else (1, ""))
+                    findings.append(
+                        Finding(
+                            path=rel,
+                            line=ln,
+                            rule=TEST_CONFIG_RULE,
+                            severity="P1",
+                            text=text.strip() or why,
+                            message=f"Test harness edited at '{rel}:{ln}': {why}, compared with the base. Fix the code under test instead.",
+                        )
+                    )
+        if not _is_linter_config_file(rel) or cfg.is_exempt(rel, LINTER_RULE):
+            continue
+        try:
+            head_text = (top / rel).read_text(encoding="utf-8")
+            base_text = git_blob(base_commit, rel, top)
+        except (OSError, UnicodeDecodeError, GitDiffError):
+            continue
+        result = linter_drift.compare(Path(rel).name, base_text, head_text)
+        if result is None:
+            continue
+        findings = [f for f in findings if not (f.rule == LINTER_RULE and f.path == rel)]
+        for why, needle, severity in result:
+            ln, text = next(((n, t) for n, t in lines if needle in t), lines[0] if lines else (1, ""))
+            findings.append(
+                Finding(
+                    path=rel,
+                    line=ln,
+                    rule=LINTER_RULE,
+                    severity=severity,
+                    text=text.strip() or why,
+                    message=f"Linter or type-checker strictness weakened in '{rel}' compared with the base: {why}.",
+                )
+            )
+    return findings
+
+
 def _disables_prufgate(pattern: str) -> bool:
     """True for an exclusion that covers every file or PrufGate's own configuration."""
     pattern = pattern.strip().strip("\"'")
@@ -759,11 +838,25 @@ def scan_diff_for_tampering(
         if sfx in (".md", ".mdx", ".rst", ".txt") and not is_linter_cfg and not is_ci_cfg:
             continue
 
+        if sfx == ".py" and hunk.file_path not in aliases:
+            aliases[hunk.file_path] = fake_exit.python_aliases(file_lines[hunk.file_path])
         exits: dict[int, str] = {}
         if is_harness:
-            if sfx == ".py" and hunk.file_path not in aliases:
-                aliases[hunk.file_path] = fake_exit.python_aliases(file_lines[hunk.file_path])
             exits = fake_exit.fake_exits(hunk, rel_path, aliases.get(hunk.file_path, {}))
+
+        # 1d. Edits to the test harness: see harness_edits.py.
+        for h in harness_edits.harness_hits(hunk, rel_path, aliases.get(hunk.file_path, {}), file_lines[hunk.file_path]):
+            if not cfg.is_exempt(rel_path, h.rule):
+                findings.append(
+                    Finding(
+                        path=rel_path,
+                        line=h.line,
+                        rule=h.rule,
+                        severity=h.severity,
+                        text=dict(hunk.added_lines).get(h.line, ""),
+                        message=f"Test harness edited at '{rel_path}:{h.line}': {h.why}. Fix the code under test instead.",
+                    )
+                )
 
         for idx, (ln, raw) in enumerate(hunk.added_lines):
             s = raw.strip()
@@ -1338,6 +1431,276 @@ new file mode 100644
 """,
         set(),
     ),
+    # --- 1d. edits to the test harness ---
+    (
+        "py-conftest-patches-assert-equal-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,3 @@
+ import sys
++import unittest
++unittest.TestCase.assertEqual = lambda *a, **k: None
+""",
+        {"test-runner-monkeypatch"},
+    ),
+    (
+        "py-test-sets-max-diff-negative",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,3 @@
+ import sys
++import unittest
++unittest.TestCase.maxDiff = None
+""",
+        set(),
+    ),
+    (
+        "py-eq-always-true-positive",
+        """diff --git a/src/ledger/money.py b/src/ledger/money.py
+--- a/src/ledger/money.py
++++ b/src/ledger/money.py
+@@ -1,1 +1,4 @@
+ import sys
++class Money:
++    def __eq__(self, other):
++        return True
+""",
+        {"always-true-equality"},
+    ),
+    (
+        "py-eq-compares-fields-negative",
+        """diff --git a/src/ledger/money.py b/src/ledger/money.py
+--- a/src/ledger/money.py
++++ b/src/ledger/money.py
+@@ -1,1 +1,4 @@
+ import sys
++class Money:
++    def __eq__(self, other):
++        return (self.amount, self.currency) == (other.amount, other.currency)
+""",
+        set(),
+    ),
+    (
+        "py-makereport-forces-passed-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,4 @@
+ import sys
++def pytest_runtest_makereport(item, call):
++    report = call
++    report.outcome = "passed"
+""",
+        {"pytest-result-rewrite"},
+    ),
+    (
+        "py-makereport-records-failure-negative",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,4 @@
+ import sys
++def pytest_runtest_makereport(item, call):
++    if call.excinfo is not None:
++        item.failed_once = True
+""",
+        set(),
+    ),
+    (
+        "py-modifyitems-clears-items-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,3 @@
+ import sys
++def pytest_collection_modifyitems(config, items):
++    items.clear()
+""",
+        {"pytest-collection-deselect"},
+    ),
+    (
+        "py-modifyitems-sorts-items-negative",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,3 @@
+ import sys
++def pytest_collection_modifyitems(config, items):
++    items.sort(key=lambda i: i.nodeid)
+""",
+        set(),
+    ),
+    (
+        "py-conftest-collect-ignore-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,2 @@
+ import sys
++collect_ignore = ['test_billing.py']
+""",
+        {"pytest-collection-deselect"},
+    ),
+    (
+        "py-conftest-collect-ignore-setup-negative",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,2 @@
+ import sys
++collect_ignore = ['setup.py']
+""",
+        set(),
+    ),
+    (
+        "py-app-outcome-passed-negative",
+        """diff --git a/src/ci/build.py b/src/ci/build.py
+--- a/src/ci/build.py
++++ b/src/ci/build.py
+@@ -1,1 +1,3 @@
+ import sys
++def finish(build):
++    build.outcome = 'passed'
+""",
+        set(),
+    ),
+    (
+        "py-matcher-name-in-app-code-positive",
+        """diff --git a/src/ledger/money.py b/src/ledger/money.py
+--- a/src/ledger/money.py
++++ b/src/ledger/money.py
+@@ -1,1 +1,4 @@
+ import sys
++class AnyMoney:
++    def __eq__(self, other):
++        return True
+""",
+        {"always-true-equality"},
+    ),
+    (
+        "makefile-banner-then-runner-negative",
+        """diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -1,1 +1,4 @@
+ import sys
++test:
++\t@echo running
++\tpytest -q
+""",
+        set(),
+    ),
+    (
+        "makefile-pipe-without-pipefail-positive",
+        """diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -1,1 +1,3 @@
+ import sys
++test:
++\tpytest | tee test.log
+""",
+        {"test-script-neutered"},
+    ),
+    (
+        "vitest-coverage-exclude-negative",
+        """diff --git a/vitest.config.ts b/vitest.config.ts
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -1,1 +1,2 @@
+ import sys
++export default { test: { coverage: { exclude: ['tests/**'] } } };
+""",
+        set(),
+    ),
+    (
+        "pytest-ini-keyword-filter-positive",
+        """diff --git a/pytest.ini b/pytest.ini
+--- a/pytest.ini
++++ b/pytest.ini
+@@ -1,1 +1,3 @@
+ import sys
++[pytest]
++addopts = -k 'not billing'
+""",
+        {"test-config-weakening"},
+    ),
+    (
+        "js-expect-extend-always-pass-positive",
+        """diff --git a/vitest.setup.ts b/vitest.setup.ts
+--- a/vitest.setup.ts
++++ b/vitest.setup.ts
+@@ -1,1 +1,6 @@
+ import { expect } from "vitest";
++expect.extend({
++  toEqual() {
++    return { pass: true, message: () => "" };
++  },
++});
+""",
+        {"test-runner-monkeypatch"},
+    ),
+    (
+        "js-expect-extend-real-matcher-negative",
+        """diff --git a/vitest.setup.ts b/vitest.setup.ts
+--- a/vitest.setup.ts
++++ b/vitest.setup.ts
+@@ -1,1 +1,6 @@
+ import { expect } from "vitest";
++expect.extend({
++  toBeCents(received) {
++    return { pass: Number.isInteger(received), message: () => "" };
++  },
++});
+""",
+        set(),
+    ),
+    (
+        "jest-config-pass-with-no-tests-positive",
+        """diff --git a/jest.config.js b/jest.config.js
+--- a/jest.config.js
++++ b/jest.config.js
+@@ -1,1 +1,2 @@
+ module.exports = {
++  passWithNoTests: true,
+""",
+        {"test-config-weakening"},
+    ),
+    (
+        "jest-config-ignores-dist-negative",
+        """diff --git a/jest.config.js b/jest.config.js
+--- a/jest.config.js
++++ b/jest.config.js
+@@ -1,1 +1,2 @@
+ module.exports = {
++  testPathIgnorePatterns: ["/node_modules/", "/dist/"],
+""",
+        set(),
+    ),
+    (
+        "package-json-test-exit-zero-positive",
+        """diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1,1 +1,2 @@
+   "scripts": {
++    "test": "exit 0",
+""",
+        {"test-script-neutered"},
+    ),
+    (
+        "package-json-default-test-script-negative",
+        """diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1,1 +1,2 @@
+   "scripts": {
++    "test": "echo \\"Error: no test specified\\" && exit 1",
+""",
+        set(),
+    ),
     # --- 4. linter-or-ci-config-weakening (Positive & Negative) ---
     (
         "tsconfig-strict-false-positive",
@@ -1474,6 +1837,7 @@ def run_self_check() -> int:
     failures: list[str] = []
     cfg = PrufGateConfig()
 
+    failures.extend(linter_drift.run_self_check())
     for case_id, diff_text, expected_rules in SELF_CHECK_CASES:
         findings = scan_diff_for_tampering(diff_text, config=cfg)
         actual_rules = {f.rule for f in findings}
@@ -1482,7 +1846,7 @@ def run_self_check() -> int:
                 f"[{case_id}] expected rules {sorted(expected_rules)}, got {sorted(actual_rules)}"
             )
 
-    total = len(SELF_CHECK_CASES)
+    total = len(SELF_CHECK_CASES) + len(linter_drift.SELF_CHECK_CASES)
     if failures:
         print(f"tamper_detector self-check FAILED ({len(failures)}/{total}):", file=sys.stderr)
         for fail in failures:
@@ -1550,6 +1914,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings = scan_diff_for_tampering(diff_text, config=cfg) if diff_text else []
     if not diff_file:
+        findings = with_linter_drift(findings, diff_text, Path.cwd(), base_ref, cfg)
         findings = with_config_drift(findings, head_cfg, Path.cwd(), base_ref, config_path)
     if not include_self:
         findings = [f for f in findings if not is_internal_path(f.path)]

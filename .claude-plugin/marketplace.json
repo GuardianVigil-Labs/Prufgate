@@ -1,0 +1,17 @@
+{
+  "name": "prufgate",
+  "description": "PrufGate: a gate that catches coding agents faking work",
+  "owner": {
+    "name": "GuardianVigil",
+    "email": "prufgate@guardianvigil.io",
+    "url": "https://github.com/GuardianVigil-Labs"
+  },
+  "plugins": [
+    {
+      "name": "prufgate",
+      "source": "./plugins/prufgate",
+      "description": "Fail-closed PrufGate hooks and a check skill for Claude Code. Needs the prufgate CLI (pipx install prufgate).",
+      "category": "security"
+    }
+  ]
+}

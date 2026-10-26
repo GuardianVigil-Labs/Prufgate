@@ -11,6 +11,8 @@ Generates:
 4. With `--agent`: `.github/hooks/prufgate.json` (Copilot), `.codex/hooks.json` (Codex),
    `.gemini/settings.json` (Gemini CLI). See docs/AGENT_HOOKS.md.
 5. `.pre-commit-config.yaml`: Git pre-commit hook running `prufgate check --changed`.
+6. With `--agents-md` / `--bugbot`: a marked PrufGate section in `AGENTS.md` / `.cursor/BUGBOT.md`
+   telling coding agents and AI reviewers how to use PrufGate's output. Rerunning updates it in place.
 """
 
 from __future__ import annotations
@@ -98,14 +100,33 @@ PRE_COMMIT_CONFIG_YAML = """repos:
         pass_filenames: false
 """
 
+# The section `init --agents-md` / `--bugbot` writes into AGENTS.md and .cursor/BUGBOT.md
+# (read by coding agents and by AI reviewers such as Cursor Bugbot). Everything between
+# the markers belongs to PrufGate and is replaced on every run; the rest of the file is kept.
+AGENTS_MD_START = "<!-- prufgate:start -->"
+AGENTS_MD_END = "<!-- prufgate:end -->"
+AGENTS_MD_SECTION = f"""{AGENTS_MD_START}
+## PrufGate
+
+This repository is checked by [PrufGate](https://github.com/GuardianVigil-Labs/Prufgate), which catches code that fakes its result, tests that cannot fail and weakened checks. For coding agents and AI reviewers:
+
+- Before saying a task is done, run `prufgate check --changed` and fix every P0 and P1 finding. Exit 0 is clean, 1 means blocking findings, 2 means the check could not run: treat 2 as not checked, never as a pass.
+- In review, treat P0 and P1 PrufGate findings as blockers. P2 and P3 are advisory.
+- Never add a `prufgate-ignore` comment without a real reason after `--` (`prufgate-ignore: rule-id -- why`). An ignore without a reason suppresses nothing and is reported itself.
+- Never edit `.prufgate/` configuration (exemptions, `known_debt`, packs, excludes) to silence a finding. Fix the code; a configuration change needs a maintainer's approval.
+- If `reports/prufgate-review.md` or `reports/prufgate.sarif` exists (written by `./prufgate.sh` or the PrufGate GitHub Action), read it before reviewing and check its findings against the code.
+{AGENTS_MD_END}
+"""
+
 # The Stop hook, as one POSIX sh command. It uses `prufgate` when it is on PATH,
 # else the installed module. Any failure to run PrufGate exits 2 (blocking) with a
 # message, so a missing install never passes silently; when the agent is
 # already continuing because of this hook (stop_hook_active), it reports and
 # exits 0 so it can never loop.
+_STOP_ACTIVE = "case \"$input\" in *'\"stop_hook_active\": true'*|*'\"stop_hook_active\":true'*) active=1;; *) active=0;; esac"
 HOOK_COMMAND = "; ".join([
     "input=$(cat)",
-    "case \"$input\" in *'\"stop_hook_active\": true'*|*'\"stop_hook_active\":true'*) active=1;; *) active=0;; esac",
+    _STOP_ACTIVE,
     "if command -v prufgate >/dev/null 2>&1; then printf '%s' \"$input\" | prufgate check --changed --format agent-hook; rc=$?",
     "elif python3 -c 'import prufgate.cli' >/dev/null 2>&1; then printf '%s' \"$input\" | python3 -m prufgate.cli check --changed --format agent-hook; rc=$?",
     "else echo 'prufgate: not installed (no prufgate on PATH, no engine module for python3); this work was not checked' >&2; rc=3; fi",
@@ -116,24 +137,27 @@ HOOK_COMMAND = "; ".join([
 ])
 
 
-def guard_command(subcommand: str, blocked: str, deny: str = "") -> str:
+def guard_command(subcommand: str, blocked: str, deny: str = "", loop_guard: bool = False) -> str:
     """A POSIX sh hook command running `prufgate <subcommand>` on the hook payload.
 
     The adapter's own exit code and stdout pass through. Anything else, including
     a missing install, exits 2 with a message: most agents treat other exit
     codes as a non-blocking failure, so they must never reach the agent. `deny`
     is printed on stdout then too, for agents (Cursor, Copilot) that read a JSON
-    block from stdout.
+    block from stdout. `loop_guard` (Stop hooks) exits 0 when the payload says the agent is
+    already continuing because of a stop hook, so a missing install reports once and never loops.
     """
     say_deny = [f"printf '%s\\n' {shlex.quote(deny)}"] if deny else []
     return "; ".join([
         "input=$(cat)",
+        *([_STOP_ACTIVE] if loop_guard else []),
         f"if command -v prufgate >/dev/null 2>&1; then printf '%s' \"$input\" | prufgate {subcommand}; rc=$?",
         f"elif python3 -c 'import prufgate.cli' >/dev/null 2>&1; then printf '%s' \"$input\" | python3 -m prufgate.cli {subcommand}; rc=$?",
         f"else echo {shlex.quote(f'prufgate: not installed (no prufgate on PATH, no engine module for python3); {blocked} until it is')} >&2; rc=3; fi",
         "[ \"$rc\" -eq 0 ] && exit 0",
         f"[ \"$rc\" -eq 2 ] || echo \"prufgate: {subcommand} could not run (exit $rc)\" >&2",
         *(["[ \"$rc\" -eq 2 ] || " + say_deny[0]] if say_deny else []),
+        *(["[ \"$active\" -eq 1 ] && exit 0"] if loop_guard else []),
         "exit 2",
     ])
 
@@ -226,7 +250,7 @@ def merge_agent_hooks(agent: str, existing: dict[str, Any] | None) -> dict[str, 
         if not isinstance(hooks, dict):
             raise HookConfigError(f'"hooks" in {label} is not an object; fix it, then rerun')
         for event, matcher, sub in entries:
-            _add_hook(hooks, event, matcher, f"prufgate {sub}", guard_command(sub, "this agent's actions are blocked"), label)
+            _add_hook(hooks, event, matcher, f"prufgate {sub}", guard_command(sub, "this agent's actions are blocked", loop_guard=sub.endswith("stop")), label)
         return data
     label, key, flat = _FLAT_HOOKS[agent]
     version = data.setdefault("version", 1)
@@ -244,6 +268,29 @@ def merge_agent_hooks(agent: str, existing: dict[str, Any] | None) -> dict[str, 
             deny = respond(agent, event_name, "prufgate could not run; this action was not checked.")[1]
             items.append({**extra, key: guard_command(sub, "this agent's actions are blocked", deny)})
     return data
+
+
+def claude_plugin_hooks() -> dict[str, Any]:
+    """`plugins/prufgate/hooks/hooks.json` in the Claude Code plugin (a test keeps the file equal to this)."""
+    def hook(sub: str, blocked: str, **extra: Any) -> list[dict[str, Any]]:
+        return [{"type": "command", "command": guard_command(sub, blocked, loop_guard=sub.endswith("stop")), **extra}]
+    return {"hooks": {
+        "PreToolUse": [{"matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+                        "hooks": hook("hook claude pre-tool", "shell commands and file edits are blocked")}],
+        "Stop": [{"hooks": hook("hook claude stop", "this work is not checked", timeout=600)}],
+    }}
+
+
+def merge_agents_section(existing: str | None, label: str = "AGENTS.md") -> str:
+    """`existing` with the PrufGate section added at the end, or replaced in place between its markers."""
+    text = existing or ""
+    start, end = text.find(AGENTS_MD_START), text.find(AGENTS_MD_END)
+    if start == -1 and end == -1:
+        return (text.rstrip("\n") + "\n\n" if text.strip() else "") + AGENTS_MD_SECTION
+    if start == -1 or end < start or text.count(AGENTS_MD_START) > 1 or text.count(AGENTS_MD_END) > 1:
+        raise HookConfigError(f"{label} has unmatched or repeated PrufGate markers; fix them, then rerun")
+    after = text[end + len(AGENTS_MD_END):]
+    return text[:start] + AGENTS_MD_SECTION + (after[1:] if after.startswith("\n") else after)
 
 
 def _read_json_object(path: Path) -> dict[str, Any] | None:
@@ -269,10 +316,13 @@ def init_workspace(
     install_hooks: bool = False,
     overwrite: bool = False,
     agents: list[str] | tuple[str, ...] | None = None,
+    agents_md: bool = False,
+    bugbot: bool = False,
 ) -> list[str]:
     """Initialize `.prufgate/config.yaml` and optional coding agent / pre-commit hooks in `workspace`.
 
     `agents` (default: Claude Code and Cursor) picks which agents get hooks; it implies `install_hooks`.
+    `agents_md` / `bugbot` merge the PrufGate section into `AGENTS.md` / `.cursor/BUGBOT.md`.
     """
     created_or_updated: list[str] = []
     ws = workspace.resolve()
@@ -289,6 +339,19 @@ def init_workspace(
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(generate_starter_config_yaml(), encoding="utf-8")
         created_or_updated.append(".prufgate/config.yaml")
+
+    # Read every file first, so a malformed one stops the run before anything is written.
+    sections: list[tuple[Path, str]] = []
+    for wanted, rel in ((agents_md, "AGENTS.md"), (bugbot, ".cursor/BUGBOT.md")):
+        if wanted:
+            path = ws / rel
+            try:
+                old = path.read_text(encoding="utf-8") if path.exists() else None
+            except (OSError, UnicodeDecodeError) as e:
+                raise HookConfigError(f"{rel} cannot be read ({e}); fix it, then rerun") from e
+            new = merge_agents_section(old, rel)
+            if new != old:
+                sections.append((path, new))
 
     if install_hooks:
         # Read every file first, so a malformed one stops the run before anything is written.
@@ -312,5 +375,10 @@ def init_workspace(
         if overwrite or not pre_commit_path.exists():
             pre_commit_path.write_text(generate_pre_commit_config_yaml(), encoding="utf-8")
             created_or_updated.append(".pre-commit-config.yaml")
+
+    for path, text in sections:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        created_or_updated.append(path.relative_to(ws).as_posix())
 
     return created_or_updated

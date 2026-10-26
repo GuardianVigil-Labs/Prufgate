@@ -35,6 +35,7 @@ from prufgate import __version__, inline_ignore  # noqa: E402
 from prufgate.bola.bola_engine import INTERNAL_SCANNER_PATHS, is_self_scan, is_test_path  # noqa: E402
 from prufgate.config import ConfigError  # noqa: E402
 from prufgate.diff_guard.tamper_detector import scan_diff_for_tampering  # noqa: E402
+from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.review.ai_adapter import review_diff_with_ai  # noqa: E402
 from prufgate.rules import low_confidence_enabled, review_rule_id, visible  # noqa: E402
 from prufgate.sarif import add_partial_fingerprints  # noqa: E402
@@ -467,6 +468,16 @@ def format_review_github(comments: list[PRComment]) -> str:
 
 def format_review_sarif(comments: list[PRComment], root: Path | None = None) -> str:
     """Format PR comments as a SARIF 2.1.0 JSON string; `root` is the repository the paths are relative to."""
+    return json.dumps(review_sarif_doc(comments, root), indent=2)
+
+
+def format_review_other(fmt: str, comments: list[PRComment], root: Path | None = None) -> str:
+    """The `gitlab` or `junit` report, built from the same SARIF document."""
+    doc = review_sarif_doc(comments, root)
+    return gitlab_code_quality(doc) if fmt == "gitlab" else junit_xml(doc)
+
+
+def review_sarif_doc(comments: list[PRComment], root: Path | None = None) -> dict:
     results = []
     for c in comments:
         level = "error" if c.severity in ("P0", "P1") else "warning"
@@ -475,6 +486,7 @@ def format_review_sarif(comments: list[PRComment], root: Path | None = None) -> 
                 "ruleId": review_rule_id(c.title),
                 "level": level,
                 "message": {"text": f"[{c.severity}] {c.title}: {c.message}"},
+                "properties": {"severity": c.severity},
                 "locations": [
                     {
                         "physicalLocation": {
@@ -501,7 +513,7 @@ def format_review_sarif(comments: list[PRComment], root: Path | None = None) -> 
             }
         ],
     }
-    return json.dumps(sarif, indent=2)
+    return sarif
 
 
 def format_review_reviewdog(comments: list[PRComment]) -> str:
@@ -572,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-md", default=None)
     parser.add_argument(
         "--format",
-        choices=("markdown", "json", "sarif", "github", "reviewdog"),
+        choices=("markdown", "json", "sarif", "github", "reviewdog", "gitlab", "junit"),
         default=None,
         help="Stdout output format when running interactively via `prufgate review`",
     )
@@ -623,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
             print(format_review_sarif([]))
         elif args.format == "reviewdog":
             print(format_review_reviewdog([]))
+        elif args.format in ("gitlab", "junit"):
+            print(format_review_other(args.format, []))
         elif args.format in ("markdown", "github"):
             print("# PR Review\n\nNo changed lines to review.")
         return 0
@@ -655,6 +669,8 @@ def main(argv: list[str] | None = None) -> int:
         print(format_review_github(comments))
     elif args.format == "reviewdog":
         print(format_review_reviewdog(comments))
+    elif args.format in ("gitlab", "junit"):
+        print(format_review_other(args.format, comments, ws_path))
     elif args.format == "markdown":
         print(format_review_markdown(comments))
     else:

@@ -64,6 +64,12 @@ CONFIDENCE: dict[str, str] = {
     # Engine 3: diff guard
     "test-skip-smuggling": HIGH,
     "test-fake-exit": HIGH,
+    "test-runner-monkeypatch": HIGH,
+    "always-true-equality": MEDIUM,
+    "pytest-result-rewrite": HIGH,
+    "pytest-collection-deselect": MEDIUM,
+    "test-config-weakening": MEDIUM,
+    "test-script-neutered": HIGH,
     "suppression-comment-smuggling": HIGH,
     "unsafe-type-cast-cascade": HIGH,
     "linter-or-ci-config-weakening": MEDIUM,
@@ -95,6 +101,8 @@ CONFIDENCE: dict[str, str] = {
     "pr-unbounded-goroutine-spawn": LOW,
     "pr-credential-logging-in-console": LOW,
     "pr-server-action-missing-authorization-guard": MEDIUM,
+    # prufgate verify --differential: base tests executed on the head code
+    "differential-base-tests-fail": HIGH,
     # Gate plumbing and the built-in ast-grep rule
     "ignore-without-reason": HIGH,
     "action-authorization-guard": MEDIUM,

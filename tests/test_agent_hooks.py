@@ -145,7 +145,8 @@ class ReviewBypasses(unittest.TestCase):
 
     def test_root_config_and_case_variants_are_protected(self):
         for path in (".prufgate.yml", ".prufgate.yaml", ".git/config", ".Claude/settings.json",
-                     "C:\\repo\\.GitHub\\Workflows\\ci.yml", ".github/workflows./ci.yml"):
+                     "C:\\repo\\.GitHub\\Workflows\\ci.yml", ".github/workflows./ci.yml",
+                     "plugins/prufgate/hooks/hooks.json", ".claude-plugin/marketplace.json", ".cursor/BUGBOT.md"):
             with self.subTest(path=path):
                 self.assertTrue(is_block("claude", "pre-tool", run("claude", "pre-tool", edit_payload("claude", path))))
         self.assertFalse(is_block("claude", "pre-tool", run("claude", "pre-tool", edit_payload("claude", "src/config.yml"))))
@@ -180,6 +181,22 @@ class ReviewBypasses(unittest.TestCase):
                     r = subprocess.run(["sh", "-c", cmd], cwd=tmp, env=env, capture_output=True, text=True, input="{}")
                     self.assertIn("not installed", r.stderr)
                     self.assertTrue(is_block(agent, event, (r.returncode, r.stdout.strip(), "")), r)
+
+    def test_codex_and_gemini_stop_hooks_do_not_loop_when_not_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            init_workspace(Path(tmp), agents=["codex", "gemini"])
+            codex = json.loads((Path(tmp) / ".codex/hooks.json").read_text())["hooks"]["Stop"]
+            gemini = json.loads((Path(tmp) / ".gemini/settings.json").read_text())["hooks"]["AfterAgent"]
+            env = {"PATH": "/usr/bin:/bin", "HOME": tmp}
+            for agent, entry in (("codex", codex), ("gemini", gemini)):
+                cmd = entry[0]["hooks"][0]["command"]
+                with self.subTest(agent=agent):
+                    first = subprocess.run(["sh", "-c", cmd], cwd=tmp, env=env, capture_output=True, text=True,
+                                           input='{"stop_hook_active": false}')
+                    self.assertEqual(first.returncode, 2, first)
+                    again = subprocess.run(["sh", "-c", cmd], cwd=tmp, env=env, capture_output=True, text=True,
+                                           input='{"stop_hook_active": true}')
+                    self.assertEqual(again.returncode, 0, again)
 
 
 class Stop(unittest.TestCase):

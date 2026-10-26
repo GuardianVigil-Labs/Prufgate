@@ -8,7 +8,7 @@ This repository is public. Every file, commit message, branch name, issue, pull 
 
 | Path | What it holds |
 |---|---|
-| `prufgate/cli.py` | The `prufgate` command: `check`, `test-audit`, `bola`, `review`, `init`, `shell-guard`, `hook`, `mcp`, `api`, `--self-check`. |
+| `prufgate/cli.py` | The `prufgate` command: `check`, `test-audit`, `bola`, `review`, `verify`, `init`, `shell-guard`, `hook`, `mcp`, `api`, `--self-check`. |
 | `prufgate/config.py` | `.prufgate/config.yaml` loading and validation. |
 | `prufgate/anti_fabrication/` | Engine 1: production code that fakes its result. `packs/` holds opt-in domain packs. |
 | `prufgate/anti_reward_hacking/` | Engine 2: tests that cannot fail. |
@@ -17,7 +17,8 @@ This repository is public. Every file, commit message, branch name, issue, pull 
 | `prufgate/bola/` | Engine 5: static tenant and auth checks on routes, and optional live two-token probing. |
 | `prufgate/review/` | Engine 6: diff review, with optional AI delegation. |
 | `prufgate/synthesizer/` | Merges engine output into SARIF and Markdown and decides the exit code. |
-| `prufgate/mcp/`, `prufgate/api/`, `prufgate/hooks/` | The MCP server, the REST API, and the coding-agent hooks written by `prufgate init --hooks`. |
+| `prufgate/mcp/`, `prufgate/api/`, `prufgate/hooks/` | The MCP server, the REST API, the coding-agent hooks written by `prufgate init --hooks`, and the AGENTS.md / BUGBOT.md section written by `--agents-md` / `--bugbot`. |
+| `plugins/prufgate/`, `.claude-plugin/marketplace.json` | The Claude Code plugin and its marketplace. `hooks/hooks.json` is generated from `claude_plugin_hooks()`; the manifest version must equal `prufgate.__version__` (`tests/test_claude_plugin.py`). |
 | `runners/`, `prufgate.sh` | The shell batteries (`fast`, `full`) used by the GitHub Action and the container. |
 | `configs/` | ast-grep rules (`rules/` built in, `examples/` opt-in), gitleaks and ruff configuration. |
 | `tests/` | `unittest` suites, including the leak guard `test_public_repo_hygiene.py`. |
@@ -39,7 +40,7 @@ The leak guard scans tracked files only, so stage new files with `git add` befor
 ## What every engine must keep
 
 - **Fail closed.** An engine that crashes, cannot read its input or is given a bad argument exits 2, and the run fails. A crash must never read as a pass.
-- **Never run code from the repository being scanned.** Repository hook scripts run only when the operator sets `PRUFGATE_ALLOW_REPO_HOOKS=1`.
+- **Never run code from the repository being scanned.** Repository hook scripts run only when the operator sets `PRUFGATE_ALLOW_REPO_HOOKS=1`. The one exception is `prufgate verify --differential` (`prufgate/differential.py`), which runs the repository's tests only with `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1` and must never be called from `check`, the batteries, the MCP server, the API or the hooks.
 - **Never write a secret into a report.** Live BOLA tokens are redacted in PoCs, SARIF and Markdown.
 - **Every rule has fixtures:** at least one invented sample it must flag and one near miss it must not, in the engine's `--self-check` cases or in `tests/`. A bug fix comes with a test that fails without it.
 - **Exit codes:** 0 clean, 1 blocking findings (P0/P1), 2 an error.

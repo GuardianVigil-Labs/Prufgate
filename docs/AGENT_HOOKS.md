@@ -27,6 +27,44 @@ Each hook runs `prufgate hook <agent> <event>` through a small `sh` wrapper. Whe
 | Gemini CLI | `.gemini/settings.json` | `BeforeTool` on `run_shell_command\|write_file\|replace`, `AfterAgent` | Partly: as for Codex, exit codes other than 0 and 2 are a warning and the tool runs | `AfterAgent` retries once (`stop_hook_active`). |
 | Windsurf, Cline | not written | | | Not adapted yet. |
 
+## Claude Code plugin
+
+Instead of writing `.claude/settings.json`, Claude Code users can install PrufGate as a plugin. It needs the `prufgate` command first:
+
+```sh
+pipx install prufgate
+```
+
+Then, in Claude Code:
+
+```text
+/plugin marketplace add GuardianVigil-Labs/Prufgate
+/plugin install prufgate@prufgate
+```
+
+(or from a shell: `claude plugin marketplace add GuardianVigil-Labs/Prufgate`, then `claude plugin install prufgate@prufgate`).
+
+The plugin lives in `plugins/prufgate/`; the marketplace file is `.claude-plugin/marketplace.json` at the repository root. It adds:
+
+| Component | What it does |
+|---|---|
+| `PreToolUse` hook on `Bash\|Edit\|Write\|MultiEdit\|NotebookEdit` | `prufgate hook claude pre-tool`: the shell guard and the edit guard in one hook |
+| `Stop` hook | `prufgate hook claude stop`: runs `prufgate check --changed` and sends Claude back once with P0/P1 findings |
+| `/prufgate:prufgate-check [base-ref]` skill | runs `prufgate check --changed`, summarises P0/P1 findings and fixes them; Claude also uses it before saying a task is done |
+
+Both hooks use the same `sh` wrapper as `init`: when `prufgate` is not installed, tool calls are blocked with a message saying so, and `Stop` sends Claude back once with that message. The plugin's version is the PrufGate version it was released with. Use the plugin or `prufgate init --agent claude`, not both, or every hook runs twice.
+
+## Instructions for agents and reviewers (AGENTS.md, BUGBOT.md)
+
+Hooks stop an agent; instructions tell it, and any AI reviewer, how to use PrufGate's output. `init` writes a short PrufGate section:
+
+```sh
+prufgate init --agents-md            # AGENTS.md (read by Codex, Copilot, Cursor, Gemini CLI and others)
+prufgate init --bugbot               # .cursor/BUGBOT.md (Cursor Bugbot review rules)
+```
+
+The section says: run `prufgate check --changed` before declaring work done, treat P0/P1 findings as blockers, never add `prufgate-ignore` without a reason, never edit `.prufgate/` to silence a finding, and read `reports/prufgate-review.md` or `reports/prufgate.sarif` when they exist. It sits between `<!-- prufgate:start -->` and `<!-- prufgate:end -->`: the first run appends it to the file (or creates the file), later runs replace only what is between the markers, and the rest of the file is never touched. Unmatched or repeated markers stop `init` without writing.
+
 ## What each event does
 
 - **`pre-tool`**: a shell tool (`Bash`, `bash`, `Shell`, `run_shell_command`) goes through the [shell-command guard](CI_INTEGRATION.md#shell-command-guard). A file edit (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, Codex `apply_patch`, Copilot `edit`/`create`, Gemini `write_file`/`replace`, Cursor `Write`) is refused when it touches `.prufgate/`, CI configuration (`.github/workflows/`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, `.circleci/`, `Jenkinsfile`, `azure-pipelines.yml`) or agent-hook configuration (`.claude/settings*.json`, `.cursor/hooks.json`, `.github/hooks/`, `.codex/hooks.json`, `.codex/config.toml`, `.gemini/settings.json`). Deleting a file (Cursor `Delete`, `*** Delete File:` in a Codex patch) is also refused on tests. Other tools are allowed.
@@ -52,6 +90,6 @@ echo '{"command": "rm -rf tests", "cwd": "."}' | prufgate hook cursor shell
 
 ## Sources
 
-The payloads and responses follow each agent's published hook reference: [Claude Code hooks](https://docs.claude.com/en/docs/claude-code/hooks), [Cursor hooks](https://cursor.com/docs/hooks), [GitHub Copilot hooks reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference), [Codex hooks](https://developers.openai.com/codex/hooks) and [Gemini CLI hooks reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md). These formats change; if an agent's hook stops firing or blocks everything, check its reference first.
+The payloads and responses follow each agent's published hook reference: [Claude Code hooks](https://docs.claude.com/en/docs/claude-code/hooks), [Cursor hooks](https://cursor.com/docs/hooks), [GitHub Copilot hooks reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference), [Codex hooks](https://developers.openai.com/codex/hooks) and [Gemini CLI hooks reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md). The plugin follows the Claude Code [plugin manifest reference](https://code.claude.com/docs/en/plugins-reference), [plugin components](https://code.claude.com/docs/en/plugins/components) and [marketplace reference](https://code.claude.com/docs/en/plugins/marketplace-reference); the Bugbot file follows [Cursor Bugbot rules](https://cursor.com/docs/bugbot). These formats change; if an agent's hook stops firing or blocks everything, check its reference first.
 
 These hooks are guard rails against an agent's habits, not a sandbox: a script file, an alias or a tool the matcher does not cover can still get around them.
