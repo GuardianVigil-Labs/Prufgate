@@ -23,6 +23,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
+from prufgate import inline_ignore  # noqa: E402
 from prufgate.config import PrufGateConfig  # noqa: E402
 
 
@@ -332,6 +333,59 @@ def _add_python_dep(manifests: WorkspaceManifests, raw_spec: str) -> None:
         manifests.python_modules |= {x.lower() for x in PYPI_TO_IMPORT_MAP.get(norm, set())}
 
 
+def find_manifest_files(workspace: Path) -> dict[str, list[Path]]:
+    """Manifest files under `workspace`, keyed by kind (`req` for requirements files)."""
+    manifest_files: dict[str, list[Path]] = {"package.json": [], "pyproject.toml": [], "go.mod": [], "Cargo.toml": [], "req": []}
+    for root, dirs, files in os.walk(workspace):
+        # Pruned relative to the workspace: a workspace under e.g. /tmp/build/ is still scanned.
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for name in files:
+            if name in manifest_files:
+                manifest_files[name].append(Path(root) / name)
+            elif name.endswith(".txt") and ("requirements" in name or Path(root).name == "requirements"):
+                manifest_files["req"].append(Path(root) / name)
+    return manifest_files
+
+
+NODE_DEP_SECTIONS = ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies")
+GO_REQUIRE_RE = re.compile(r"^\s*(?:require\s+)?([a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)+)\s+v[0-9]", re.MULTILINE)
+
+
+def cargo_dependencies(text: str) -> tuple[set[str], dict[str, str]]:
+    """(`[package]`/`[lib]` names, {dependency key: its value}) from a Cargo.toml.
+
+    A `[dependencies.serde]` table is keyed by its name, with its body lines as the value.
+    """
+    own: set[str] = set()
+    deps: dict[str, str] = {}
+    section = ""
+    dotted = ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        m_sec = re.match(r"^\[\[?([^\]]+)\]\]?$", line)
+        if m_sec:
+            section = m_sec.group(1).strip().lower()
+            # `[dependencies.serde]` declares the crate in the table name itself.
+            m_dotted = re.match(r"^(?:.*\.)?(?:dev-|build-)?dependencies\.([a-z0-9_-]+)$", section)
+            dotted = m_dotted.group(1) if m_dotted else ""
+            if dotted:
+                deps.setdefault(dotted, "")
+            continue
+        m_dep = re.match(r"^([a-zA-Z0-9_-]+)\s*=\s*(.+)$", line)
+        if not m_dep:
+            continue
+        key, val = m_dep.group(1), m_dep.group(2).strip()
+        if dotted:
+            deps[dotted] += f" {key} = {val}"
+        elif section in ("package", "lib") and key == "name":
+            m_name = re.match(r'^["\']([^"\']+)["\']', val)
+            if m_name:
+                own.add(m_name.group(1))
+        elif re.search(r"(?:^|\.)(?:dev-|build-)?dependencies$", section):
+            deps[key] = val
+    return own, deps
+
+
 def load_declared_dependencies(workspace: Path) -> WorkspaceManifests:
     """Discover and parse `package.json`, `pyproject.toml`, `requirements*.txt`, `go.mod`, and `Cargo.toml`."""
     manifests = WorkspaceManifests()
@@ -353,15 +407,7 @@ def load_declared_dependencies(workspace: Path) -> WorkspaceManifests:
         elif child.is_file() and child.suffix == ".py":
             manifests.local_python_modules.add(child.stem)
 
-    manifest_files: dict[str, list[Path]] = {"package.json": [], "pyproject.toml": [], "go.mod": [], "Cargo.toml": [], "req": []}
-    for root, dirs, files in os.walk(workspace):
-        # Pruned relative to the workspace: a workspace under e.g. /tmp/build/ is still scanned.
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for name in files:
-            if name in manifest_files:
-                manifest_files[name].append(Path(root) / name)
-            elif name.endswith(".txt") and ("requirements" in name or Path(root).name == "requirements"):
-                manifest_files["req"].append(Path(root) / name)
+    manifest_files = find_manifest_files(workspace)
 
     # 1. Node package.json files
     for pkg_json in manifest_files["package.json"]:
@@ -375,7 +421,7 @@ def load_declared_dependencies(workspace: Path) -> WorkspaceManifests:
         pkg_name = data.get("name")
         if isinstance(pkg_name, str) and pkg_name.strip():
             manifests.node_packages.add(pkg_name.strip())
-        for section in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        for section in NODE_DEP_SECTIONS:
             sec_obj = data.get(section)
             if not isinstance(sec_obj, dict):
                 continue
@@ -404,36 +450,19 @@ def load_declared_dependencies(workspace: Path) -> WorkspaceManifests:
         text = gomod.read_text(encoding="utf-8", errors="ignore")
         for m_mod in re.finditer(r"^\s*module\s+(\S+)", text, re.MULTILINE):
             manifests.go_modules.add(m_mod.group(1).strip())
-        for m_req in re.finditer(r"^\s*(?:require\s+)?([a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)+)\s+v[0-9]", text, re.MULTILINE):
+        for m_req in GO_REQUIRE_RE.finditer(text):
             manifests.go_modules.add(m_req.group(1).strip())
 
     # 4. Rust Cargo.toml files
     for cargo in manifest_files["Cargo.toml"]:
         manifests.has_rust_manifest = True
-        section = ""
-        for raw_line in cargo.read_text(encoding="utf-8", errors="ignore").splitlines():
-            line = raw_line.strip()
-            m_sec = re.match(r"^\[\[?([^\]]+)\]\]?$", line)
-            if m_sec:
-                section = m_sec.group(1).strip().lower()
-                # `[dependencies.serde]` declares the crate in the table name itself.
-                m_dotted = re.match(r"^(?:.*\.)?(?:dev-|build-)?dependencies\.([a-z0-9_-]+)$", section)
-                if m_dotted:
-                    manifests.rust_crates.add(m_dotted.group(1).replace("-", "_"))
-                continue
-            m_dep = re.match(r"^([a-zA-Z0-9_-]+)\s*=\s*(.+)$", line)
-            if not m_dep:
-                continue
-            key, val = m_dep.group(1), m_dep.group(2).strip()
-            if section in ("package", "lib") and key == "name":
-                m_name = re.match(r'^["\']([^"\']+)["\']', val)
-                if m_name:
-                    manifests.rust_crates.add(m_name.group(1).replace("-", "_"))
-            elif re.search(r"(?:^|\.)(?:dev-|build-)?dependencies$", section):
-                manifests.rust_crates.add(key.replace("-", "_"))
-                m_pkg = re.search(r"""\bpackage\s*=\s*["']([^"']+)["']""", val)
-                if m_pkg:  # `alias = { package = "real-name" }` imports as `alias`
-                    manifests.rust_crates.add(m_pkg.group(1).replace("-", "_"))
+        own, deps = cargo_dependencies(cargo.read_text(encoding="utf-8", errors="ignore"))
+        manifests.rust_crates |= {n.replace("-", "_") for n in own}
+        for key, val in deps.items():
+            manifests.rust_crates.add(key.replace("-", "_"))
+            m_pkg = re.search(r"""\bpackage\s*=\s*["']([^"']+)["']""", val)
+            if m_pkg:  # `alias = { package = "real-name" }` imports as `alias`
+                manifests.rust_crates.add(m_pkg.group(1).replace("-", "_"))
 
     return manifests
 
@@ -476,7 +505,7 @@ def _scan_js_ts_imports(
 
     for ln, raw in enumerate(lines, start=1):
         s = raw.strip()
-        if not s or s.startswith(("//", "/*", "*")) or "prufgate-ignore" in s.lower():
+        if not s or s.startswith(("//", "/*", "*")):
             continue
         # Skip pure type-only imports if desired? No, unless @types or package is in package.json
         for m in import_re.finditer(s):
@@ -552,8 +581,6 @@ def _scan_python_imports(
 
             for ln, mod in top_mods:
                 raw_line = lines[ln - 1].strip() if 1 <= ln <= len(lines) else f"import {mod}"
-                if "prufgate-ignore" in raw_line.lower():
-                    continue
                 mod_norm = mod.lower().replace("-", "_")
                 if (
                     mod in PYTHON_STDLIB
@@ -596,7 +623,7 @@ def _scan_go_imports(
 
     for ln, raw in enumerate(lines, start=1):
         s = raw.strip()
-        if not s or s.startswith("//") or "prufgate-ignore" in s.lower():
+        if not s or s.startswith("//"):
             continue
         if re.match(r"^import\s*\(", s):
             in_import_block = True
@@ -653,7 +680,7 @@ def _scan_rust_imports(
 
     for ln, raw in enumerate(lines, start=1):
         s = raw.strip()
-        if not s or s.startswith("//") or "prufgate-ignore" in s.lower():
+        if not s or s.startswith("//"):
             continue
         m = use_re.match(s) or extern_re.match(s)
         if not m:
@@ -697,11 +724,19 @@ def scan_file_dependencies(
     sfx = p.suffix.lower()
 
     if sfx in (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"):
-        return _scan_js_ts_imports(rel_path, content, mf)
-    if sfx == ".py":
-        return _scan_python_imports(p, rel_path, content, mf)
-    if sfx == ".go":
-        return _scan_go_imports(rel_path, content, mf)
-    if sfx == ".rs":
-        return _scan_rust_imports(rel_path, content, mf)
-    return []
+        found = _scan_js_ts_imports(rel_path, content, mf)
+    elif sfx == ".py":
+        found = _scan_python_imports(p, rel_path, content, mf)
+    elif sfx == ".go":
+        found = _scan_go_imports(rel_path, content, mf)
+    elif sfx == ".rs":
+        found = _scan_rust_imports(rel_path, content, mf)
+    else:
+        return []
+    lines = content.splitlines()
+    return [
+        f for f in found
+        if not inline_ignore.suppressed_at(
+            lines, f.line, f.rule, engine="contract-guard", path=rel_path, severity=f.severity, message=f.message
+        )
+    ]

@@ -32,7 +32,7 @@ Every engine module runs on its own (`python3 prufgate/<engine>/<module>.py --he
 
 ## Changed files
 
-"Changed" means the diff between a base ref and the working tree, plus untracked files. The base is chosen once (`--base`, `PRUFGATE_BASE_REF`, `origin/$GITHUB_BASE_REF`, then `origin/HEAD` or `HEAD~1` on a clean tree) and passed to every engine. Git is always run with the workspace as its directory, with `--end-of-options`, and refs that start with `-` are refused.
+"Changed" means the diff between a base ref and the working tree, plus untracked files. The base is chosen once (`--base`, `PRUFGATE_BASE_REF`, `origin/$GITHUB_BASE_REF`, then `origin/HEAD`, or `HEAD~1` on a clean tree) and passed to every engine. Git is always run with the workspace as its directory, with `--end-of-options`, and refs that start with `-` are refused.
 
 ## Failing closed
 

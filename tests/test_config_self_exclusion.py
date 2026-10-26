@@ -1,8 +1,9 @@
 """A branch must not switch PrufGate off through its own configuration.
 
-The configuration is read from the branch under review, so the diff guard
-always analyses PrufGate's configuration files, whatever they exclude or
-exempt, and flags a deleted or renamed one.
+With a base ref every engine applies the configuration as it is at the base,
+so a branch's configuration edit takes effect only after merge. The diff guard
+still analyses PrufGate's configuration files, whatever they exclude or
+exempt, flags a deleted or renamed one, and says the branch's was ignored.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prufgate.config import PrufGateConfig
+from prufgate.config import ConfigError, NotAFileError, PrufGateConfig, git_blob
 from prufgate.diff_guard.tamper_detector import scan_diff_for_tampering
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -167,6 +168,14 @@ BYPASSES = {
     ),
     "deleted config drops a pack": ({CFG: "packs: [core, web-ui, ai-safety, cti]\n"}, {CFG: None}, (), "P1"),
     "explicit packs replace the defaults": ({CFG: "packs: [cti]\n"}, {CFG: "packs: [core, cti]\n"}, (), "P1"),
+    "low-confidence rules turned off": ({CFG: "enable_low_confidence: true\n"}, {CFG: "version: 1\n"}, (), "P1"),
+    "registry max age lowered": (
+        {CFG: "registry_check: {max_age_days: 30}\n"}, {CFG: "registry_check: {max_age_days: 0}\n"}, (), "P1",
+    ),
+    "model call pattern removed": (
+        {CFG: 'model_call_patterns: ["llm\\\\.ask"]\n'}, {CFG: "version: 1\n"}, (), "P1",
+    ),
+    "config replaced by a directory": ({CFG: "version: 1\n"}, {CFG: None, CFG + "/README": "x\n"}, (), "P1"),
 }
 
 
@@ -247,13 +256,171 @@ class ConfigComparedByValue(unittest.TestCase):
             out = Path(tmp) / "dg.json"
             res = _run(repo, str(ROOT / "prufgate/diff_guard/tamper_detector.py"), "--base=main", f"--json-out={out}")
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertEqual({f["rule"] for f in json.loads(out.read_text())}, {"prufgate-config-not-applied"})
 
     def test_a_tightened_config_is_not_flagged(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _repo(tmp, {CFG: 'exclude: ["docs/**", "dist/**"]\n'}, {CFG: 'exclude: ["dist/**"]\npacks: [core, web-ui, ai-safety, cti]\n'})
+            repo = _repo(tmp, {CFG: 'exclude: ["docs/**", "dist/**"]\n'}, {CFG: 'exclude: ["dist/**"]\npacks: [core, web-ui, ai-safety, cti]\nenable_low_confidence: true\n'})
             out = Path(tmp) / "dg.json"
             res = _run(repo, str(ROOT / "prufgate/diff_guard/tamper_detector.py"), "--base=main", f"--json-out={out}")
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+
+# A high-confidence finding: low-confidence rules are off by default.
+FAKE = 'def export():\n    raise NotImplementedError("not wired")\n'
+SELF_EXEMPT = 'exempt:\n  - {path: src/app.py, rule: unimplemented-production-stub, reason: "#1: fine"}\n'
+
+
+def _findings(res: subprocess.CompletedProcess) -> set[tuple[str, str]]:
+    return {(f["rule"], f["severity"]) for f in json.loads(res.stdout)}
+
+
+class ConfigReadFromTheBaseRef(unittest.TestCase):
+    """Issue: a coding agent edits the configuration in the same change to exempt its own finding."""
+
+    def test_same_change_exemption_does_not_suppress_the_finding(self):
+        for base in ({}, {CFG: "version: 1\n"}):
+            with self.subTest(base_has_config=bool(base)), tempfile.TemporaryDirectory() as tmp:
+                repo = _repo(tmp, base, {CFG: SELF_EXEMPT, "src/app.py": FAKE})
+                res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main", "--format", "json")
+                self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+                found = _findings(res)
+                self.assertIn(("unimplemented-production-stub", "P0"), found)
+                self.assertIn((RULE, "P1"), found)
+                self.assertIn(("prufgate-config-not-applied", "P2"), found)
+                msgs = " ".join(f["message"] for f in json.loads(res.stdout))
+                self.assertIn("take effect after merge", msgs)
+                self.assertIn("introduces" if not base else "changes", msgs)
+
+    def test_engine_scripts_read_the_base_config_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "version: 1\n"}, {CFG: SELF_EXEMPT, "src/app.py": FAKE})
+            out = Path(tmp) / "af.json"
+            res = _run(repo, str(ROOT / "prufgate/anti_fabrication/detector.py"), "--changed=main", f"--json-out={out}")
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn("unimplemented-production-stub", out.read_text())
+
+    def test_a_base_exemption_still_applies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: SELF_EXEMPT}, {"src/app.py": FAKE})
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main", "--format", "json")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertNotIn("prufgate-config-not-applied", res.stdout)
+
+    def test_without_a_base_ref_the_working_tree_config_applies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {}, {"README.md": "notes\n"})
+            (repo / ".prufgate").mkdir()
+            (repo / CFG).write_text(SELF_EXEMPT)
+            (repo / "src/app.py").write_text(FAKE)
+            # Uncommitted changes and no base ref: the working-tree diff and config.
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--format", "json")
+            self.assertNotIn(("unimplemented-production-stub", "P0"), _findings(res), res.stdout + res.stderr)
+            self.assertNotIn("prufgate-config-not-applied", res.stdout)
+            self.assertEqual(PrufGateConfig.load(repo).exempt, {("src/app.py", "unimplemented-production-stub"): "#1: fine"})
+
+    def test_config_missing_at_the_base_loads_the_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {}, {CFG: SELF_EXEMPT})
+            cfg = PrufGateConfig.load(repo, ref="main")
+            self.assertIsNone(cfg.source_path)
+            self.assertTrue(cfg.same_settings(PrufGateConfig()))
+            base = PrufGateConfig.load(_repo(tempfile.mkdtemp(dir=tmp), {CFG: SELF_EXEMPT}, {CFG: None}), ref="main")
+            self.assertEqual(base.source_path.name, "config.yaml")
+            self.assertIn(("src/app.py", "unimplemented-production-stub"), base.exempt)
+
+    def test_a_base_config_this_version_rejects_falls_back_to_the_branch(self):
+        """An upgrade that rejects an old key must not block the change that fixes it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "version: 1\nretired_key: true\n"}, {CFG: "version: 1\n", "src/app.py": FAKE})
+            self.assertTrue(PrufGateConfig.load(repo, ref="main").same_settings(PrufGateConfig()))
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main", "--format", "json")
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            found = _findings(res)
+            self.assertIn(("prufgate-config-base-invalid", "P2"), found)
+            self.assertIn(("unimplemented-production-stub", "P0"), found)
+            msg = next(f["message"] for f in json.loads(res.stdout) if f["rule"] == "prufgate-config-base-invalid")
+            self.assertIn("(.prufgate/config.yaml: unknown key(s): retired_key)", msg)
+            out = Path(tmp) / "dg.json"
+            res = _run(repo, str(ROOT / "prufgate/diff_guard/tamper_detector.py"), "--base=main", f"--json-out={out}")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertEqual({f["rule"] for f in json.loads(out.read_text())}, {"prufgate-config-base-invalid"})
+
+    def test_an_invalid_branch_config_still_fails_when_the_base_is_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "retired_key: true\n"}, {CFG: "another_bad_key: 1\n"})
+            with self.assertRaises(ConfigError):
+                PrufGateConfig.load(repo, ref="main")
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main")
+            self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+
+    def test_an_unreadable_base_ref_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "version: 1\n"}, {"src/app.py": FAKE})
+            with self.assertRaises(ConfigError):
+                PrufGateConfig.load(repo, ref="no-such-ref")
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "no-such-ref")
+            self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+            for script in ("anti_fabrication/detector.py", "anti_reward_hacking/test_integrity.py", "diff_guard/tamper_detector.py"):
+                with self.subTest(script):
+                    res = _run(repo, str(ROOT / "prufgate" / script), "--changed=no-such-ref")
+                    self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "bola", ".", "--static-only", "--base", "no-such-ref")
+            self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+
+
+class BaseConfigMadeInvalid(unittest.TestCase):
+    """Two changes: the first makes the base configuration unreadable, the second loosens it."""
+
+    def test_git_blob_reads_only_files_and_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG + "/README": "x\n"}, {"other.py": "x = 1\n"})
+            with self.assertRaises(NotAFileError):
+                git_blob("main", CFG, repo)
+            self.assertEqual(git_blob("main", CFG + "/README", repo), "x\n")
+
+    def test_a_directory_at_the_base_does_not_open_the_door(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(
+                tmp,
+                {CFG + "/README": "x\n"},
+                {".prufgate.yml": '{"version": 1, "exclude": ["src"]}\n', "src/app.py": FAKE},
+            )
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main", "--format", "json")
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            found = _findings(res)
+            self.assertIn((RULE, "P1"), found)
+            self.assertIn(("prufgate-config-base-invalid", "P1"), found)
+
+    def test_an_invalid_base_is_compared_with_the_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "retired_key: true\n"}, {CFG: '{version: 1, exclude: ["src"]}\n', "src/app.py": FAKE})
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main", "--format", "json")
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            found = _findings(res)
+            self.assertIn((RULE, "P1"), found)
+            self.assertIn(("prufgate-config-base-invalid", "P2"), found)
+
+
+class ExplicitConfigAtTheBase(unittest.TestCase):
+    def test_a_relative_config_path_is_read_at_the_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "version: 1\n"}, {CFG: SELF_EXEMPT, "src/app.py": FAKE})
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--base", "main", "--config", CFG, "--format", "json")
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn(("unimplemented-production-stub", "P0"), _findings(res))
+
+
+class UntrackedFileDoesNotHideCommits(unittest.TestCase):
+    def test_a_dirty_tree_still_compares_with_origin_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(tmp, {CFG: "version: 1\n"}, {CFG: SELF_EXEMPT, "src/app.py": FAKE})
+            subprocess.run([*GIT, "update-ref", "refs/remotes/origin/main", "main"], cwd=repo, check=True)
+            subprocess.run([*GIT, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], cwd=repo, check=True)
+            (repo / "notes.txt").write_text("x\n")
+            res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--format", "json")
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn(("unimplemented-production-stub", "P0"), _findings(res))
 
 
 if __name__ == "__main__":

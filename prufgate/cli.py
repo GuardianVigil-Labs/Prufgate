@@ -4,9 +4,11 @@
 Subcommands:
   - `prufgate check [path] [--changed] [--base REF] [--format text|json|sarif|agent-hook]`
   - `prufgate test-audit [path] [--changed] [--format text|json]`
-  - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--static-only]`
+  - `prufgate bola [path] [--url URL] [--token-a ...] [--token-b ...] [--static-only] [--base REF]`
   - `prufgate review [--base REF] [--diff-file PATH] [--format markdown|json|sarif|github|reviewdog] [--ai]`
-  - `prufgate init [path] [--hooks] [--overwrite]`
+  - `prufgate init [path] [--hooks] [--agent NAME ...] [--overwrite]`
+  - `prufgate shell-guard` (Claude Code PreToolUse hook: payload on stdin, exit 2 blocks)
+  - `prufgate hook <agent> <event>` (fail-closed coding-agent hook adapters, docs/AGENT_HOOKS.md)
   - `prufgate mcp`
   - `prufgate api [--host 127.0.0.1] [--port 8000]`
   - `prufgate fast` / `prufgate full` (shortcuts for `check --changed` / `check`)
@@ -32,14 +34,18 @@ if str(_THIS_DIR.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent))
 
 import prufgate.contract_guard as cg_engine  # noqa: E402
-from prufgate import PROJECT_URL, __version__  # noqa: E402
+from prufgate import PROJECT_URL, __version__, inline_ignore  # noqa: E402
 from prufgate.anti_fabrication import detector as af_detector  # noqa: E402
 from prufgate.anti_reward_hacking import test_integrity as ti_engine  # noqa: E402
 from prufgate.bola import bola_engine  # noqa: E402
 from prufgate.config import ConfigError, PrufGateConfig, expand_rule_aliases, rules_match  # noqa: E402
 from prufgate.diff_guard import tamper_detector as dg_engine  # noqa: E402
-from prufgate.hooks.agent_hooks import HookConfigError, init_workspace  # noqa: E402
+from prufgate.hooks.adapters import AGENTS, EVENTS  # noqa: E402
+from prufgate.hooks.agent_hooks import AGENT_CHOICES, HookConfigError, init_workspace  # noqa: E402
 from prufgate.review import reviewer as rev_engine  # noqa: E402
+from prufgate.rules import SARIF_RANK, visible  # noqa: E402
+from prufgate.rules import confidence as rule_confidence  # noqa: E402
+from prufgate.sarif import add_partial_fingerprints  # noqa: E402
 
 
 def run_all_self_checks() -> int:
@@ -69,8 +75,12 @@ def _collect_unified_findings(
     changed_only: bool = False,
     base_ref: str | None = None,
     config_path: str | None = None,
+    honoured: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run Engines 1-5 on `target_path` and return normalized finding dicts.
+
+    A reasonless inline ignore is returned as an `ignore-without-reason` finding;
+    the ignores the engines honoured are appended to `honoured` when it is given.
 
     The engines read git and relative paths from the current directory, so the
     scan runs from the workspace root whatever directory `prufgate` was started in.
@@ -80,9 +90,27 @@ def _collect_unified_findings(
     previous_cwd = Path.cwd()
     os.chdir(workspace)
     try:
-        return _collect_in_workspace(workspace, target_path, changed_only, base_ref, config_path)
+        with inline_ignore.recording() as records:
+            found = _collect_in_workspace(workspace, target_path, changed_only, base_ref, config_path)
     finally:
         os.chdir(previous_cwd)
+    for e in records:
+        if e["kind"] == "missing-reason":
+            found.append(
+                {
+                    "engine": e["engine"],
+                    "rule": inline_ignore.MISSING_REASON_RULE,
+                    "severity": "P2",
+                    "file": e["file"],
+                    "line": e["line"],
+                    "message": f"{inline_ignore.MISSING_REASON_MESSAGE} It names `{e['rule']}`, which is still reported.",
+                    "snippet": "",
+                    "confidence": rule_confidence(inline_ignore.MISSING_REASON_RULE),
+                }
+            )
+        elif honoured is not None:
+            honoured.append(e)
+    return found
 
 
 def _is_internal(engine: Any, path: str) -> bool:
@@ -118,11 +146,12 @@ def _commit(ref: str) -> str | None:
 def resolve_base_ref(explicit: str | None = None) -> str | None:
     """The base ref a changed-files scan diffs against, run from the workspace.
 
-    Order: `explicit`, PRUFGATE_BASE_REF, origin/$GITHUB_BASE_REF; then, only when
-    the working tree has no changes, origin/HEAD or HEAD~1, skipping a
+    Order: `explicit`, PRUFGATE_BASE_REF, origin/$GITHUB_BASE_REF; then
+    origin/HEAD, and HEAD~1 only when the working tree has no changes, skipping a
     candidate that HEAD is not ahead of (so a clean default branch never
-    compares with itself). Returns None when the working tree has changes and
-    no base was given: the working-tree diff is scanned. Raises BaseRefError
+    compares with itself). An untracked file must not hide a branch's commits
+    from the scan. Returns None when the working tree has changes and no base
+    applies: the working-tree diff is scanned. Raises BaseRefError
     when there is nothing to compare: never an empty diff that reads as a pass.
     """
     head = _commit("HEAD")
@@ -136,14 +165,14 @@ def resolve_base_ref(explicit: str | None = None) -> str | None:
             raise BaseRefError(f"base ref {ref!r} is not a commit in this repository (shallow clone? fetch it first)")
         return ref
     dirty = _git_ok("diff", "--quiet", "HEAD") is None or bool(_git_ok("ls-files", "--others", "--exclude-standard"))
-    if dirty:
-        return None
-    for candidate in ("origin/HEAD", "HEAD~1"):
+    for candidate in ("origin/HEAD",) if dirty else ("origin/HEAD", "HEAD~1"):
         if _commit(candidate) is None:
             continue
         merge_base = _git_ok("merge-base", candidate, "HEAD")
         if merge_base and merge_base.strip() != head:
             return candidate
+    if dirty:
+        return None
     raise BaseRefError(
         "the working tree is clean and no base ref is usable (set --base or PRUFGATE_BASE_REF; "
         "a shallow CI clone needs fetch-depth: 0)"
@@ -157,9 +186,12 @@ def _collect_in_workspace(
     base_ref: str | None,
     config_path: str | None,
 ) -> list[dict[str, Any]]:
-    cfg = PrufGateConfig.load(workspace, config_path)
     if changed_only:
         base_ref = resolve_base_ref(base_ref)
+    # With a base ref every engine applies the configuration at the base: the
+    # branch's own edits take effect after merge. Engine 3 compares the two.
+    head_cfg = PrufGateConfig.load(workspace, config_path)
+    cfg = PrufGateConfig.load(workspace, config_path, ref=base_ref) if base_ref else head_cfg
 
     unified: list[dict[str, Any]] = []
 
@@ -247,7 +279,7 @@ def _collect_in_workspace(
     diff_for_dg = dg_engine._get_git_diff(base_ref, cwd=workspace)
     dg_findings = dg_engine.scan_diff_for_tampering(diff_for_dg, config=cfg) if diff_for_dg else []
     # The configuration in effect, compared by value with the one at the base.
-    dg_findings = dg_engine.with_config_drift(dg_findings, cfg, workspace, base_ref, config_path)
+    dg_findings = dg_engine.with_config_drift(dg_findings, head_cfg, workspace, base_ref, config_path)
     if dg_findings:
         for dgf in dg_findings:
             if not _is_internal(dg_engine, dgf.path):
@@ -305,6 +337,11 @@ def _collect_in_workspace(
             seen.add(key)
             deduped.append(item)
 
+    # Low-confidence rules are off unless the config turns them on: not reported, not blocking.
+    for item in deduped:
+        item["confidence"] = rule_confidence(str(item["rule"]))
+    deduped = visible(deduped, cfg.enable_low_confidence)
+
     # known_debt ceilings: a breach is a blocker; findings within a ceiling are tracked debt.
     violations, advisories = cfg.check_debt_ratchet(deduped)
     for adv in advisories:
@@ -320,6 +357,7 @@ def _collect_in_workspace(
                     "line": 1,
                     "message": v,
                     "snippet": "",
+                    "confidence": rule_confidence("debt-ceiling-breached"),
                 }
             )
     elif cfg.known_debt_ceilings:
@@ -333,17 +371,26 @@ def _collect_in_workspace(
     return deduped
 
 
-def _format_sarif_findings(findings: list[dict[str, Any]]) -> str:
+def _format_sarif_findings(
+    findings: list[dict[str, Any]],
+    root: Path | None = None,
+    honoured: list[dict[str, Any]] | None = None,
+) -> str:
+    """Honoured inline ignores become results with an in-source `suppressions` entry."""
     results = []
-    for f in findings:
+    rules: dict[str, dict[str, Any]] = {}
+    for f in findings + (honoured or []):
         sev = str(f.get("severity", "P1")).upper()
         level = "error" if sev in ("P0", "P1") else "warning"
+        rule_id = str(f.get("rule", "prufgate-finding"))
+        conf = rule_confidence(rule_id)
+        rules.setdefault(rule_id, _sarif_rule(rule_id))
         results.append(
             {
-                "ruleId": str(f.get("rule", "prufgate-finding")),
+                "ruleId": rule_id,
                 "level": level,
                 "message": {"text": f"[{sev}] ({f.get('engine', 'prufgate')}) {f.get('message', '')}"},
-                "properties": {"severity": sev, "engine": str(f.get("engine", "prufgate"))},
+                "properties": {"severity": sev, "engine": str(f.get("engine", "prufgate")), "confidence": conf},
                 "locations": [
                     {
                         "physicalLocation": {
@@ -354,6 +401,9 @@ def _format_sarif_findings(findings: list[dict[str, Any]]) -> str:
                 ],
             }
         )
+        if f.get("kind") == "honoured":
+            results[-1]["suppressions"] = [{"kind": "inSource", "justification": str(f.get("reason", ""))}]
+    add_partial_fingerprints(results, root)
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "version": "2.1.0",
@@ -364,6 +414,7 @@ def _format_sarif_findings(findings: list[dict[str, Any]]) -> str:
                         "name": "prufgate",
                         "version": __version__,
                         "informationUri": os.environ.get("PRUFGATE_INFO_URI", PROJECT_URL),
+                        "rules": list(rules.values()),
                     }
                 },
                 "results": results,
@@ -371,6 +422,16 @@ def _format_sarif_findings(findings: list[dict[str, Any]]) -> str:
         ],
     }
     return json.dumps(sarif, indent=2)
+
+
+def _sarif_rule(rule_id: str) -> dict[str, Any]:
+    """SARIF rule metadata: `precision` is the rule's confidence, as code scanning reads it."""
+    conf = rule_confidence(rule_id)
+    return {
+        "id": rule_id,
+        "defaultConfiguration": {"rank": SARIF_RANK[conf]},
+        "properties": {"precision": conf},
+    }
 
 
 def _stop_hook_active() -> bool:
@@ -391,12 +452,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
         print(f"prufgate check: path does not exist: {args.path}", file=sys.stderr)
         return 2
 
+    honoured: list[dict[str, Any]] = []
     try:
         findings = _collect_unified_findings(
             target,
             changed_only=args.changed,
             base_ref=args.base,
             config_path=args.config,
+            honoured=honoured,
         )
     except (ConfigError, af_detector.SettingsError) as exc:
         print(f"prufgate check: {exc}", file=sys.stderr)
@@ -414,7 +477,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps(findings, indent=2))
     elif args.format == "sarif":
-        print(_format_sarif_findings(findings))
+        # Finding paths are relative to the scanned directory, or to the file's directory for one file.
+        print(_format_sarif_findings(findings, target if target.is_dir() else target.parent, honoured))
     elif args.format == "agent-hook":
         if blockers:
             print(
@@ -433,6 +497,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
             return 2
         return 0
     else:
+        if honoured:
+            print(f"{len(honoured)} finding(s) suppressed by an inline prufgate-ignore:")
+            for e in honoured:
+                print(f"  [{e['engine']}:{e['rule']}] {e['file']}:{e['line']} — {e['reason']}")
         if not findings:
             print("✔ PrufGate check passed: 0 findings across Engines 1-5.")
             return 0
@@ -480,7 +548,7 @@ def _cmd_bola(args: argparse.Namespace) -> int:
 
     try:
         ws = Path(args.path).resolve()
-        cfg = PrufGateConfig.load(ws, args.config)
+        cfg = PrufGateConfig.load(ws, args.config, ref=args.base)
         findings: list[bola_engine.BolaFinding] = []
         if not args.static_only and args.url:
             if not bola_engine.check_server_active(args.url):
@@ -491,6 +559,7 @@ def _cmd_bola(args: argparse.Namespace) -> int:
         if ws.exists():
             with redirect_stdout(io.StringIO()):
                 findings.extend(bola_engine.run_static_matrix_audit(ws, config=cfg))
+        findings = visible(findings, cfg.enable_low_confidence)
 
         if args.format == "json":
             print(json.dumps([f.to_dict() for f in findings], indent=2))
@@ -529,7 +598,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     ws = Path(args.path).resolve()
     ws.mkdir(parents=True, exist_ok=True)
     try:
-        written = init_workspace(ws, install_hooks=args.hooks, overwrite=args.overwrite)
+        written = init_workspace(ws, install_hooks=args.hooks, overwrite=args.overwrite, agents=args.agent)
     except HookConfigError as exc:
         print(f"prufgate init: {exc}", file=sys.stderr)
         return 2
@@ -606,6 +675,7 @@ def main(argv: list[str] | None = None) -> int:
     p_bola.add_argument("--tenant-b", default=None, help="Resource/Tenant ID for Tenant B")
     p_bola.add_argument("--static-only", action="store_true", help="Run only static route & query scoping checks")
     p_bola.add_argument("--config", default=None, help="Path to .prufgate/config.yaml")
+    p_bola.add_argument("--base", default=None, help="Read the PrufGate configuration as it is at this base ref (changed-files runs)")
     p_bola.add_argument("--format", choices=("text", "json"), default="text")
 
     # 4. prufgate review
@@ -625,8 +695,29 @@ def main(argv: list[str] | None = None) -> int:
     # 5. prufgate init
     p_init = subparsers.add_parser("init", help="Initialize .prufgate/config.yaml and coding agent stop hooks")
     p_init.add_argument("path", nargs="?", default=".", help="Workspace directory to initialize")
-    p_init.add_argument("--hooks", action="store_true", help="Generate Claude Code, Cursor, and pre-commit hooks")
+    p_init.add_argument("--hooks", action="store_true", help="Generate coding-agent hooks (default: Claude Code and Cursor) and a pre-commit hook")
+    p_init.add_argument(
+        "--agent",
+        action="append",
+        choices=AGENT_CHOICES,
+        default=None,
+        help="Agent to write hooks for; repeat for several (implies --hooks)",
+    )
     p_init.add_argument("--overwrite", action="store_true", help="Overwrite existing config/hook files")
+
+    # 5b. prufgate shell-guard
+    subparsers.add_parser(
+        "shell-guard",
+        help="Coding-agent PreToolUse hook: read the hook JSON on stdin, exit 2 to block hook-skipping, force pushes and test deletion",
+    )
+
+    # 5c. prufgate hook <agent> <event>
+    p_hook = subparsers.add_parser(
+        "hook",
+        help="Fail-closed coding-agent hook adapter: read the agent's hook JSON on stdin and answer in its protocol",
+    )
+    p_hook.add_argument("agent", choices=AGENTS)
+    p_hook.add_argument("event", choices=EVENTS, help="pre-tool (shell/edit guard), shell (Cursor beforeShellExecution), stop")
 
     # 6. prufgate mcp
     subparsers.add_parser("mcp", help="Start PrufGate Model Context Protocol (MCP) stdio server")
@@ -664,6 +755,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_review(args)
     if args.subcommand == "init":
         return _cmd_init(args)
+    if args.subcommand == "shell-guard":
+        from prufgate.hooks.shell_guard import main as shell_guard_main
+
+        return shell_guard_main()
+    if args.subcommand == "hook":
+        from prufgate.hooks.adapters import main as hook_main
+
+        return hook_main(args.agent, args.event)
     if args.subcommand == "mcp":
         from prufgate.mcp.prufgate_mcp_server import main as mcp_main
 

@@ -31,10 +31,13 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
-from prufgate import __version__  # noqa: E402
+from prufgate import __version__, inline_ignore  # noqa: E402
 from prufgate.bola.bola_engine import INTERNAL_SCANNER_PATHS, is_self_scan, is_test_path  # noqa: E402
+from prufgate.config import ConfigError  # noqa: E402
 from prufgate.diff_guard.tamper_detector import scan_diff_for_tampering  # noqa: E402
 from prufgate.review.ai_adapter import review_diff_with_ai  # noqa: E402
+from prufgate.rules import low_confidence_enabled, review_rule_id, visible  # noqa: E402
+from prufgate.sarif import add_partial_fingerprints  # noqa: E402
 
 
 class PRComment:
@@ -186,7 +189,7 @@ def analyze_diff(hunks: list[dict[str, Any]], skip_internal: bool = False) -> li
         if _skip_review_path(file, skip_internal):
             continue
 
-        if not content or content.startswith(("//", "#", "/*", "*")) or "prufgate-ignore" in content.lower():
+        if not content or content.startswith(("//", "#", "/*", "*")):
             continue
 
         window_lines = [
@@ -346,7 +349,15 @@ def analyze_diff(hunks: list[dict[str, Any]], skip_internal: bool = False) -> li
                     )
                 )
 
-    return comments
+    added = {(h["file"], h["line"]): h["content"] for h in hunks}
+    return [
+        c for c in comments
+        if not inline_ignore.suppressed(
+            inline_ignore.context([added.get((c.file_path, c.line - 1), ""), added.get((c.file_path, c.line), "")], 2),
+            review_rule_id(c.title), engine="pr-reviewer", path=c.file_path, line=c.line,
+            severity=c.severity, message=f"{c.title}: {c.message}",
+        )
+    ]
 
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -454,15 +465,14 @@ def format_review_github(comments: list[PRComment]) -> str:
     return "\n".join(lines)
 
 
-def format_review_sarif(comments: list[PRComment]) -> str:
-    """Format PR comments as a SARIF 2.1.0 JSON string."""
+def format_review_sarif(comments: list[PRComment], root: Path | None = None) -> str:
+    """Format PR comments as a SARIF 2.1.0 JSON string; `root` is the repository the paths are relative to."""
     results = []
     for c in comments:
         level = "error" if c.severity in ("P0", "P1") else "warning"
-        rule_id = re.sub(r"[^a-z0-9-]+", "-", c.title.lower()).strip("-") or "pr-review"
         results.append(
             {
-                "ruleId": rule_id,
+                "ruleId": review_rule_id(c.title),
                 "level": level,
                 "message": {"text": f"[{c.severity}] {c.title}: {c.message}"},
                 "locations": [
@@ -475,6 +485,7 @@ def format_review_sarif(comments: list[PRComment]) -> str:
                 ],
             }
         )
+    add_partial_fingerprints(results, root)
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "version": "2.1.0",
@@ -570,6 +581,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw_args)
 
     ws_path = Path(args.workspace).resolve()
+    # Read at the base like every other setting: a branch must not turn its own
+    # findings off. The default base may be absent; its diff falls back to HEAD.
+    cfg_ref = None if args.diff_file else args.base
+    if cfg_ref == DEFAULT_BASE and subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", f"{DEFAULT_BASE}^{{commit}}"],
+        cwd=ws_path if ws_path.exists() else None, capture_output=True, check=False,
+    ).returncode != 0:
+        cfg_ref = "HEAD"
+    try:
+        enable_low = low_confidence_enabled(ws_path, ref=cfg_ref)
+    except ConfigError as exc:
+        print(f"reviewer: {exc}", file=sys.stderr)
+        return 2
     reports_dir = Path(os.environ.get("PRUFGATE_REPORTS_DIR", str(ws_path / "reports")))
     output_json = args.output or args.output_json or str(reports_dir / "raw" / "pr_review.json")
     output_md = args.output_md or str(reports_dir / "raw" / "pr_review.md")
@@ -614,6 +638,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # fail closed: a crash is never a pass
         print(f"reviewer: error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
+    comments = visible(comments, enable_low)
 
     Path(output_json).parent.mkdir(parents=True, exist_ok=True)
     Path(output_json).write_text(json.dumps([c.to_dict() for c in comments], indent=2), encoding="utf-8")
@@ -625,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.format == "json":
         print(json.dumps([c.to_dict() for c in comments], indent=2))
     elif args.format == "sarif":
-        print(format_review_sarif(comments))
+        print(format_review_sarif(comments, ws_path))
     elif args.format == "github":
         print(format_review_github(comments))
     elif args.format == "reviewdog":

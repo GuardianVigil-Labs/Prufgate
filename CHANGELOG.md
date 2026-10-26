@@ -4,9 +4,20 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Changed
+- **Inline ignores need a reason:** `prufgate-ignore: rule -- why`. An ignore without one (at least three characters) no longer suppresses and is reported as `ignore-without-reason`. Every honoured ignore is listed in the report and as a SARIF suppression. An ignore now hides only the rules it names, in every engine.
+- **With a base ref, the configuration and baseline are read from the base:** a change to `.prufgate/config.yaml` takes effect after it is merged, and the change itself is reported (`prufgate-config-not-applied`). If the base config is rejected by this version, the branch's config is used and compared with the defaults (`prufgate-config-base-invalid`).
+- Review rule IDs are normalised to `pr-` plus lowercase letters, digits and hyphens, the same in Markdown and SARIF.
+
 ### Added
 - Fuzz targets for the config loader, the diff parsers and the source and test scanners (`fuzz/`), run by ClusterFuzzLite on pull requests.
 - Each release attaches `<file>.intoto.jsonl` with the wheel's and sdist's signed attestations, for offline verification.
+- Test-cheat rules in the diff: `test-fake-exit` (an exit or module-level skip added to tests, conftest or test setup), `diff-test-file-deleted` (including a rename to a name the test runner doesn't collect) and `diff-test-count-drop`.
+- `prufgate shell-guard` and `prufgate hook <agent> <event>`: fail-closed hooks for Claude Code, Cursor, GitHub Copilot, Codex and Gemini CLI. They block skipping git hooks (`--no-verify`, `core.hooksPath`, `HUSKY=0`), force pushes, and removing or editing tests, CI files, PrufGate's config or the agents' own hook config. `prufgate init --agent NAME` writes the hook configuration.
+- `.pre-commit-hooks.yaml`: `prufgate` (staged changes, pre-commit) and `prufgate-full` (pre-push).
+- A confidence level (high, medium, low) on every rule and finding, in JSON, Markdown and SARIF (`precision`). Low-confidence rules are off unless `enable_low_confidence: true`.
+- An opt-in registry check for newly added dependencies (`registry_check: true`): `dependency-not-on-registry`, `dependency-recently-published` and `dependency-typosquat` for npm, PyPI, crates.io and Go modules, with a local cache. It fails closed when a lookup fails, unless `offline_ok` is set.
+- Stable SARIF `partialFingerprints` (GitHub's `primaryLocationLineHash`), so code scanning tracks an alert across commits.
 
 ### Fixed
 - A `.prufgate/config.yaml` with a non-string top-level key (for example a bare `?`) crashed with a `TypeError` instead of a configuration error. Found by fuzzing.

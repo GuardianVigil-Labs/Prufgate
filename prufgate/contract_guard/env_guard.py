@@ -17,6 +17,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
+from prufgate import inline_ignore  # noqa: E402
 from prufgate.config import PrufGateConfig  # noqa: E402
 from prufgate.contract_guard.dependency_guard import Finding  # noqa: E402
 
@@ -132,7 +133,7 @@ def scan_file_env_drift(
 
     for ln, raw in enumerate(lines, start=1):
         s = raw.strip()
-        if not s or s.startswith(("#", "//", "/*", "*")) or "prufgate-ignore" in s.lower():
+        if not s or s.startswith(("#", "//", "/*", "*")):
             continue
         for kind, pat in ENV_READ_PATTERNS:
             for m in pat.finditer(s):
@@ -141,6 +142,15 @@ def scan_file_env_drift(
                     continue
                 if kind in ("js-dot", "js-bracket") and _line_has_inline_fallback(s, m.end()):
                     continue
+                message = (
+                    f"Environment variable '{var_name}' in '{rel_path}:{ln}' is not documented in "
+                    f"`.env.example` and has no fallback default."
+                )
+                if inline_ignore.suppressed_at(
+                    lines, ln, "undocumented-env-var-drift", engine="contract-guard", path=rel_path,
+                    severity="P1", message=message,
+                ):
+                    continue
                 findings.append(
                     Finding(
                         path=rel_path,
@@ -148,10 +158,7 @@ def scan_file_env_drift(
                         rule="undocumented-env-var-drift",
                         severity="P1",
                         text=s,
-                        message=(
-                            f"Environment variable '{var_name}' in '{rel_path}:{ln}' is not documented in "
-                            f"`.env.example` and has no fallback default."
-                        ),
+                        message=message,
                     )
                 )
     return findings

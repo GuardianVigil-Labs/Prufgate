@@ -26,7 +26,9 @@ if str(PRUFGATE_ROOT) not in sys.path:
     sys.path.insert(0, str(PRUFGATE_ROOT))
 
 from prufgate import __version__  # noqa: E402
+from prufgate.config import ConfigError  # noqa: E402
 from prufgate.netguard import target_url_error  # noqa: E402
+from prufgate.rules import low_confidence_enabled, visible  # noqa: E402
 
 ENGINE_DIR = PRUFGATE_ROOT / "prufgate"
 CLI = ENGINE_DIR / "cli.py"
@@ -114,8 +116,17 @@ def _run_json(cmd: List[str], ws: Path, out_flag: Optional[str] = None, stdout_j
         return items, None
 
 
-def _result(tool: str, ws: Path, findings: Optional[list], error: Optional[str], **extra: Any) -> Dict[str, Any]:
+def _result(
+    tool: str, ws: Path, findings: Optional[list], error: Optional[str], *, cfg_ref: Optional[str] = None, **extra: Any
+) -> Dict[str, Any]:
+    """`cfg_ref`: the base a diff-based tool compared with ("HEAD" for the
+    working-tree diff), where the configuration is read, like the engines do."""
     findings = findings or []
+    try:
+        # Low-confidence rules are hidden and never block unless the config turns them on.
+        findings = visible(findings, low_confidence_enabled(ws, ref=cfg_ref))
+    except ConfigError as exc:
+        error = "; ".join(filter(None, [error, f"config: {exc}"]))
     blockers = sum(1 for f in findings if str(f.get("severity", "P0")).upper() in ("P0", "P1"))
     res: Dict[str, Any] = {
         "tool": tool,
@@ -150,7 +161,8 @@ def prufgate_fast_scan(workspace_path: str = ".", base_ref: Optional[str] = None
     """Engines 1-5 on changed files (`prufgate check --changed`)."""
     ws, base = _workspace(workspace_path), _base_ref(base_ref)
     findings, err = _run_json(_check_cmd(ws, True, base), ws, stdout_json=True)
-    return _result("prufgate_fast_scan", ws, findings, err, base_ref=base)
+    resolved, base_err = _resolve_base(ws, base)
+    return _result("prufgate_fast_scan", ws, findings, err, cfg_ref=None if base_err else resolved or "HEAD", base_ref=base)
 
 
 def prufgate_full_scan(workspace_path: str = ".", base_ref: Optional[str] = None, target_url: Optional[str] = None) -> Dict[str, Any]:
@@ -180,7 +192,10 @@ def prufgate_full_scan(workspace_path: str = ".", base_ref: Optional[str] = None
         add("review", *_run_json(_review_cmd(ws, review_base), ws, stdout_json=True))
     if target_url:
         add("bola_live", *_run_json(_bola_cmd(ws, target_url), ws, stdout_json=True))
-    return _result("prufgate_full_scan", ws, findings, "; ".join(errors) or None, steps=steps, base_ref=base, target_url=target_url)
+    cfg_ref = None if base_err else review_base or "HEAD"
+    return _result(
+        "prufgate_full_scan", ws, findings, "; ".join(errors) or None, cfg_ref=cfg_ref, steps=steps, base_ref=base, target_url=target_url
+    )
 
 
 def _review_cmd(ws: Path, base: str) -> List[str]:
@@ -194,13 +209,13 @@ def _diff_tool(tool: str, script: str, workspace_path: str, base_ref: Optional[s
     base, err = _resolve_base(ws, _base_ref(base_ref))
     if err:
         return _result(tool, ws, None, err)
-    return _engine_tool(tool, script, str(ws), [f"--changed={base}" if base else "--changed"])
+    return _engine_tool(tool, script, str(ws), [f"--changed={base}" if base else "--changed"], base or "HEAD")
 
 
-def _engine_tool(tool: str, script: str, workspace_path: str, args: List[str]) -> Dict[str, Any]:
+def _engine_tool(tool: str, script: str, workspace_path: str, args: List[str], cfg_ref: Optional[str] = None) -> Dict[str, Any]:
     ws = _workspace(workspace_path)
     findings, err = _run_json([str(SCRIPTS[script]), *args], ws, out_flag="--json-out")
-    return _result(tool, ws, findings, err)
+    return _result(tool, ws, findings, err, cfg_ref=cfg_ref)
 
 
 def prufgate_anti_fabrication(workspace_path: str = ".", changed_only: bool = False, base_ref: Optional[str] = None) -> Dict[str, Any]:
@@ -230,7 +245,9 @@ def prufgate_contract_check(workspace_path: str = ".", changed_only: bool = Fals
     base, err = _resolve_base(ws, _base_ref(base_ref))
     if err:
         return _result("prufgate_contract_check", ws, None, err)
-    return _engine_tool("prufgate_contract_check", "contract_check", str(ws), [f"--changed={base}" if base else "--changed", f"--workspace={ws}"])
+    return _engine_tool(
+        "prufgate_contract_check", "contract_check", str(ws), [f"--changed={base}" if base else "--changed", f"--workspace={ws}"], base or "HEAD"
+    )
 
 
 def prufgate_bola_check(workspace_path: str = ".", target_url: Optional[str] = None) -> Dict[str, Any]:
@@ -251,7 +268,7 @@ def prufgate_review(workspace_path: str = ".", base_ref: Optional[str] = None) -
     if err:
         return _result("prufgate_review", ws, None, err)
     findings, err = _run_json(_review_cmd(ws, base), ws, stdout_json=True)
-    return _result("prufgate_review", ws, findings, err, base_ref=base or "working tree")
+    return _result("prufgate_review", ws, findings, err, cfg_ref=base or "HEAD", base_ref=base or "working tree")
 
 
 def prufgate_summary(workspace_path: str = ".") -> Dict[str, Any]:

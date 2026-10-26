@@ -185,5 +185,181 @@ diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
             self.assertEqual(synth_findings[0].severity, "P0")
 
 
+class TestFakeExit(unittest.TestCase):
+    """`test-fake-exit`: a run that ends as a pass before the tests run."""
+
+    @staticmethod
+    def _diff(path: str, *added: str, context: str = "import sys") -> str:
+        body = "".join(f"+{line}\n" for line in added)
+        return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,{len(added) + 1} @@\n {context}\n{body}"
+
+    def _rules(self, diff_text: str, cfg: PrufGateConfig | None = None) -> list[str]:
+        return [f.rule for f in scan_diff_for_tampering(diff_text, config=cfg)]
+
+    def test_flags_success_exits_in_test_code(self) -> None:
+        for path, line in (
+            ("tests/conftest.py", "os._exit(0)"),
+            ("tests/test_orders.py", "exit()"),
+            ("tests/test_orders.py", "raise SystemExit"),
+            ("tests/test_orders.py", 'pytest.exit("done", returncode=0)'),
+            ("tests/test_orders.py", 'pytest.skip("later", allow_module_level=True)'),
+            ("src/orders.test.ts", "process.exit()"),
+            ("vitest.setup.ts", "process.exit(0);"),
+            ("test/helpers/boot.js", "process.exit(0)"),
+        ):
+            with self.subTest(path=path, line=line):
+                self.assertEqual(self._rules(self._diff(path, line)), ["test-fake-exit"])
+
+    def test_near_misses_are_not_flagged(self) -> None:
+        for path, line in (
+            ("tests/test_orders.py", "sys.exit(1)"),
+            ("tests/test_orders.py", "sys.exit(main())"),
+            ("tests/test_orders.py", '    assert "sys.exit(0)" in out'),
+            ("tests/test_orders.py", "# sys.exit(0)"),
+            ("tests/test_orders.py", "def exit():"),
+            ("tests/test_orders.py", "app.exit(0)"),
+            ("tests/test_orders.py", "raise SystemExit(2)"),
+            ("tests/test_orders.py", 'pytest.skip("later #12", allow_module_level=True)'),
+            ("src/orders.test.ts", "expect(() => process.exit(0)).toThrow()"),
+            ("src/cli.ts", "process.exit(0)"),
+            ("scripts/release.py", "sys.exit(0)"),
+        ):
+            with self.subTest(path=path, line=line):
+                self.assertEqual(self._rules(self._diff(path, line)), [])
+
+    def test_exit_expected_by_unittest_is_not_flagged(self) -> None:
+        diff_text = self._diff(
+            "tests/test_cli.py",
+            "        with self.assertRaises(SystemExit):",
+            "            sys.exit(0)",
+            context="    def test_help(self):",
+        )
+        self.assertEqual(self._rules(diff_text), [])
+
+    def test_review_reproductions_are_flagged(self) -> None:
+        for path, line in (
+            ("tests/conftest.py", "sys.exit(0)  # expect("),
+            ("tests/conftest.py", "sys.exit(0)  # raises(SystemExit)"),
+            ("tests/conftest.py", "os._exit(int())"),
+            ("tests/conftest.py", "sys.exit(0x0)"),
+            ("tests/conftest.py", "sys.exit(0o0)"),
+            ("tests/conftest.py", "sys.exit(False)"),
+            ("tests/conftest.py", "sys.exit(not 1)"),
+            ("tests/conftest.py", "raise SystemExit(0) from None"),
+            ("tests/conftest.py", "raise SystemExit(code=0)"),
+            ("tests/conftest.py", "from sys import exit as e; e(0)"),
+            ("tests/conftest.py", "getattr(sys, 'exit')(0)"),
+            ("tests/conftest.py", "pytest.exit('x', 0)"),
+            ("tests/conftest.py", "if True: sys.exit(0)"),
+            ("tests/test_orders.py", "expect(1); sys.exit(0)"),
+            ("tests/test_orders.py", 'pytest.skip("#123"); sys.exit(0)'),
+            ("tests/test_cli.py", "x = 1 if expect(a) else sys.exit(0)"),
+            ("tests/a.test.js", "process['exit'](0)"),
+            ("tests/a.test.js", "process.exit(0) // expect("),
+            ("tests/a.test.js", "process.exit(0); expect(1)"),
+            ("tests/a.test.js", "expect(1); process.exit(0);"),
+            ("tests/a.test.js", "expect(process.exit(0))"),
+            ("vitest.setup.ts", "process.exit(false)"),
+            ("vitest.setup.ts", "process.exit(undefined)"),
+            ("vitest.setup.ts", "process.exit(null)"),
+            ("pkg/x_test.go", "syscall.Exit(0)"),
+            ("pkg/x_test.go", "os.Exit(int(0))"),
+        ):
+            with self.subTest(path=path, line=line):
+                self.assertEqual(self._rules(self._diff(path, line)), ["test-fake-exit"])
+
+    def test_exits_run_when_a_def_runs_or_hidden_in_constant_expressions(self) -> None:
+        for lines in (
+            ("def _unused(x=sys.exit(0)):", "    pass"),
+            ("def _unused(*, x=os._exit(0)):", "    pass"),
+            ("def _unused() -> sys.exit(0):", "    pass"),
+            ("@(lambda _: sys.exit(0))", "def _unused():", "    pass"),
+            ("def test_x():", "    sys.exit(0 + 0)"),
+            ("def test_x():", "    sys.exit(1 - 1)"),
+            ("def test_x():", "    sys.exit(0 or 0)"),
+            ("def test_x():", "    rc = 0", "    sys.exit(rc)"),
+        ):
+            with self.subTest(lines=lines):
+                self.assertEqual(self._rules(self._diff("tests/test_a.py", *lines)), ["test-fake-exit"])
+        for lines in (
+            ("def _unused(x=1):", "    sys.exit(0)"),
+            ("def test_x():", "    sys.exit(1 + 0)"),
+            ("def test_x(rc=0):", "    sys.exit(rc)"),
+            ("def test_x():", "    rc = 0", "    rc = run()", "    sys.exit(rc)"),
+        ):
+            with self.subTest(lines=lines):
+                self.assertEqual(self._rules(self._diff("tests/test_a.py", *lines)), [])
+
+    def test_alias_imported_in_another_hunk(self) -> None:
+        diff_text = (
+            "diff --git a/tests/conftest.py b/tests/conftest.py\n--- a/tests/conftest.py\n+++ b/tests/conftest.py\n"
+            "@@ -1,1 +1,1 @@\n from os import _exit as quit_now\n"
+            "@@ -20,1 +20,2 @@\n x = 1\n+quit_now(0)\n"
+        )
+        self.assertEqual(self._rules(diff_text), ["test-fake-exit"])
+
+    def test_module_level_skip_at_any_indentation(self) -> None:
+        diff_text = self._diff("tests/test_a.py", "if True:", '    pytest.skip("x", allow_module_level=True)', context="import pytest")
+        self.assertEqual(self._rules(diff_text), ["test-fake-exit"])
+
+    def test_with_block_must_enclose_the_exit(self) -> None:
+        diff_text = self._diff(
+            "tests/test_cli.py",
+            "def test_help():",
+            "    with pytest.raises(SystemExit):",
+            "        pass",
+            "    sys.exit(0)",
+        )
+        self.assertEqual(self._rules(diff_text), ["test-fake-exit"])
+
+    def test_exits_in_setup_hooks_and_called_helpers_are_flagged(self) -> None:
+        for path, lines in (
+            ("tests/test_a.py", ("class T(unittest.TestCase):", "    @classmethod", "    def setUpClass(cls):", "        sys.exit(0)")),
+            ("tests/test_a.py", ("@pytest.fixture(autouse=True)", "def boot():", "    sys.exit(0)")),
+            ("tests/test_a.py", ("def _bail():", "    sys.exit(0)", "_bail()")),
+            ("tests/test_a.py", ("def _bail():", "    sys.exit(0)", "def test_x():", "    _bail()")),
+            ("tests/conftest.py", ("def helper():", "    sys.exit(0)")),
+            ("tests/a.test.js", ("it('x', () => {", "  process.exit(0);", "});")),
+            ("pkg/main_test.go", ("func TestMain(m *testing.M) {", "\tos.Exit(0)", "}")),
+        ):
+            with self.subTest(path=path, lines=lines):
+                self.assertEqual(self._rules(self._diff(path, *lines)), ["test-fake-exit"])
+
+    def test_added_call_to_existing_exiting_helper_is_flagged(self) -> None:
+        diff_text = (
+            "diff --git a/tests/test_a.py b/tests/test_a.py\n--- a/tests/test_a.py\n+++ b/tests/test_a.py\n"
+            "@@ -1,3 +1,4 @@\n def _bail():\n     sys.exit(0)\n \n+_bail()\n"
+        )
+        self.assertEqual([(f.rule, f.line) for f in scan_diff_for_tampering(diff_text)], [("test-fake-exit", 4)])
+
+    def test_fixture_script_helpers_are_not_flagged(self) -> None:
+        cases = (
+            ("tests/fixtures/fake_cli.py", ("def main():", "    print('ok')", "    sys.exit(0)", "", 'if __name__ == "__main__":', "    main()")),
+            ("tests/test_a.py", ("def _quit():", "    sys.exit(0)")),
+            ("tests/test_cli.py", ("def run():", "    sys.exit(0)", "def test_run():", "    with pytest.raises(SystemExit):", "        run()")),
+            ("tests/test_cli.py", ("def test_run(self):", "    self.assertRaises(SystemExit, lambda: sys.exit(0))")),
+            ("tests/helpers/cli.js", ("function fakeCli() {", "  process.exit(0);", "}")),
+            ("pkg/helpers_test.go", ("func runFake() {", "\tos.Exit(0)", "}")),
+            ("tests/test_a.py", ('"""', "sys.exit(0)", '"""')),
+        )
+        for path, lines in cases:
+            with self.subTest(path=path, lines=lines):
+                self.assertEqual(self._rules(self._diff(path, *lines)), [])
+        self.assertEqual(self._rules(self._diff("tests/test_a.py", 'pytest.skip("#12 flaky", allow_module_level=True)')), [])
+        self.assertEqual(self._rules(self._diff("tests/test_a.py", "def test_x():", '    pytest.skip("#12 flaky")')), [])
+
+    def test_line_fallback_when_the_hunk_does_not_parse(self) -> None:
+        bad = "  broken("
+        self.assertEqual(self._rules(self._diff("tests/test_a.py", "    sys.exit(0)  # raises(SystemExit)", bad)), ["test-fake-exit"])
+        expected = self._diff("tests/test_a.py", "    with pytest.raises(SystemExit):", "        sys.exit(0)", bad)
+        self.assertEqual(self._rules(expected), [])
+        helper = self._diff("tests/test_a.py", "    def _quit():", "        sys.exit(0)", bad)
+        self.assertEqual(self._rules(helper), [])
+
+    def test_exemption_applies(self) -> None:
+        cfg = PrufGateConfig(exempt={("tests/conftest.py", "test-fake-exit"): "documented smoke harness"})
+        self.assertEqual(self._rules(self._diff("tests/conftest.py", "sys.exit(0)"), cfg), [])
+
+
 if __name__ == "__main__":
     unittest.main()

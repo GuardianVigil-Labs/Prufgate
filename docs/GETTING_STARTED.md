@@ -33,9 +33,10 @@ prufgate check [PATH] [--changed] [--base REF] [--config FILE] [--format text|js
 prufgate fast                     same as: prufgate check --changed
 prufgate full                     same as: prufgate check
 prufgate test-audit [PATH] [--changed] [--base REF] [--config FILE] [--json-out FILE]
-prufgate bola [PATH] [--static-only] [--url URL --token-a T --token-b T --tenant-a ID --tenant-b ID] [--format text|json]
+prufgate bola [PATH] [--static-only] [--url URL --token-a T --token-b T --tenant-a ID --tenant-b ID] [--base REF] [--format text|json]
 prufgate review [--workspace PATH] [--base REF] [--diff-file FILE] [--format markdown|json|sarif|github|reviewdog] [--ai --ai-provider NAME]
 prufgate init [PATH] [--hooks] [--overwrite]
+prufgate shell-guard              Claude Code PreToolUse hook: hook JSON on stdin, exit 2 blocks
 prufgate base-ref [PATH]          print the base ref the changed scope would use (exit 2 if none is usable)
 prufgate mcp                      (or prufgate-mcp) the MCP server on stdio
 prufgate api [--host 127.0.0.1] [--port 8000]
@@ -47,6 +48,7 @@ prufgate --self-check | --version | --help
 - **`prufgate bola`** runs engine 5. It is static only unless you give a URL and two tokens: see [live probing](#live-bola-probing).
 - **`prufgate review`** runs engine 6 on a diff. It is deterministic by default; `--ai` hands the changed hunks to an AI CLI or API you have configured (see [ENGINES.md](ENGINES.md#engine-6-diff-reviewer)).
 - **`prufgate init`** writes a starter `.prufgate/config.yaml`. With `--hooks` it also writes the coding-agent hooks described in [CI_INTEGRATION.md](CI_INTEGRATION.md#coding-agent-hooks).
+- **`prufgate shell-guard`** is the shell-command guard those hooks run before an agent's shell command: see [the shell guard](CI_INTEGRATION.md#shell-command-guard).
 
 ### Which changes "changed" means
 
@@ -55,7 +57,8 @@ With `--changed`, PrufGate compares against a base ref and includes uncommitted 
 1. `--base REF`
 2. the `PRUFGATE_BASE_REF` environment variable
 3. `origin/$GITHUB_BASE_REF` (set by GitHub Actions on pull requests)
-4. on a clean working tree only: `origin/HEAD`, then `HEAD~1`
+4. `origin/HEAD`
+5. on a clean working tree only: `HEAD~1`
 
 A candidate the branch is not ahead of (for example `origin/HEAD` right after a pull) is skipped. A base ref that does not exist, or no usable base on a clean tree (often a shallow clone), is an error (exit 2), never "nothing changed". `prufgate base-ref` shows which base would be used. In CI, check out with full history (`fetch-depth: 0`).
 

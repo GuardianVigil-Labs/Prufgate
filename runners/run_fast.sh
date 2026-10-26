@@ -6,11 +6,14 @@
 # into an ERROR verdict (exit 2), never a pass.
 #
 # Usage: run_fast.sh [changed|full]
-# Base ref: PRUFGATE_BASE_REF, origin/$GITHUB_BASE_REF (pull requests), then,
-# when the working tree has no changes, origin/HEAD or HEAD~1 if HEAD is ahead
+# Base ref: PRUFGATE_BASE_REF, origin/$GITHUB_BASE_REF (pull requests), then
+# origin/HEAD, or HEAD~1 when the working tree has no changes, if HEAD is ahead
 # of it. With uncommitted changes and no base ref, the working-tree diff is
-# scanned. With nothing to compare, the changed scope is an error; the full
+# scanned against HEAD and the baseline is read as committed at HEAD. With nothing to compare, the changed scope is an error; the full
 # scope skips the two diff-only engines (diff guard, reviewer) and says so.
+# With a base ref the engines read the PrufGate configuration as it is at the
+# base (git show), never the working tree: configuration changes take effect
+# after merge. The full scope reads the working tree, except the diff guard.
 #
 
 set -uo pipefail
@@ -21,6 +24,11 @@ SCAN_SCOPE="${1:-changed}"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 ENGINE="${TOOL_ROOT}/prufgate"
+
+# Every engine appends the inline ignores it honoured (or refused for lack of a
+# reason) here; the synthesizer counts and lists them in the report.
+export PRUFGATE_SUPPRESSIONS_FILE="${RAW_DIR}/suppressions.jsonl"
+rm -f "${PRUFGATE_SUPPRESSIONS_FILE}"
 
 # run_step <tool> <pillar> <output-file-or-empty> <command...>
 # Output goes to reports/raw/<tool>.log so a crash is visible, not swallowed.
@@ -63,6 +71,8 @@ DIFF_ARGS=("--changed${BASE_REF:+=${BASE_REF}}")
 # The reviewer diffs <base>...HEAD; with no base, HEAD...HEAD is empty and it
 # falls back to the working-tree diff.
 REVIEW_ARGS=("--base=${BASE_REF:-HEAD}")
+# The synthesizer reads the baseline at the same base ref (the changed scope only).
+[ "${FULL}" -eq 0 ] && printf '%s\n' "${BASE_REF}" >"${RAW_DIR}/base_ref"
 
 echo "▶ [PrufGate] Starting verification gate (scope: ${SCAN_SCOPE}${BASE_REF:+, base: ${BASE_REF}})"
 
@@ -123,6 +133,8 @@ if [ -n "${TARGET_URL:-}" ] && [ "${BOLA_STATIC_ONLY:-0}" != "1" ]; then
 else
   BOLA_ARGS=("--static-only")
 fi
+# A changed-files run reads the PrufGate configuration at the base ref, like engines 1-4.
+[ "${FULL}" -eq 0 ] && [ -n "${BASE_REF}" ] && BOLA_ARGS+=("--base=${BASE_REF}")
 bola_json() { python3 "${ENGINE}/cli.py" bola "${WORKSPACE}" "${BOLA_ARGS[@]}" --format json >"${RAW_DIR}/bola_matrix.json"; }
 run_step bola-matrix security bola_json
 

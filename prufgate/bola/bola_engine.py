@@ -44,8 +44,9 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None  # type: ignore[assignment]
 
-from prufgate import __version__  # noqa: E402
-from prufgate.config import ConfigError, PrufGateConfig  # noqa: E402
+from prufgate import __version__, inline_ignore  # noqa: E402
+from prufgate.config import ConfigError, PrufGateConfig, rules_match  # noqa: E402
+from prufgate.rules import visible  # noqa: E402
 
 
 class BolaFinding:
@@ -1148,9 +1149,6 @@ def run_static_matrix_audit(
             continue
         if cfg.is_excluded(route.file_path) or cfg.is_exempt(route.file_path, "static-bola-unscoped-access"):
             continue
-        if "prufgate-ignore" in route.handler_snippet.lower():
-            continue
-
         loc_key = (route.file_path, route.line)
         if loc_key in seen_handler_locs:
             continue
@@ -1170,14 +1168,26 @@ def run_static_matrix_audit(
                 if (not has_auth and not has_tenant_scope)
                 else ("missing authentication guard" if not has_auth else "missing tenant/owner key scoping on object lookup")
             )
+            message = (
+                f"Route '{','.join(route.methods)} {route.path}' ({route.framework}) performs direct object lookup "
+                f"by '{route.param_names[-1] if route.param_names else 'id'}' {missing_desc}."
+            )
+            # On the route line or the comment just above it any ignore counts; elsewhere in the
+            # handler it must name this rule, so an ignore meant for another line cannot hide the route.
+            texts = inline_ignore.context(route.file_content.splitlines(), route.line) + [
+                t for t in route.handler_snippet.splitlines()
+                if (ig := inline_ignore.parse(t)) and any(rules_match("static-bola-unscoped-access", r) for r in ig[0])
+            ]
+            if inline_ignore.suppressed(
+                texts, "static-bola-unscoped-access", engine="bola-matrix", path=route.file_path, line=route.line,
+                severity="P0", message=message,
+            ):
+                continue
             findings.append(
                 BolaFinding(
                     rule_id="static-bola-unscoped-access",
                     severity="P0",
-                    message=(
-                        f"Route '{','.join(route.methods)} {route.path}' ({route.framework}) performs direct object lookup "
-                        f"by '{route.param_names[-1] if route.param_names else 'id'}' {missing_desc}."
-                    ),
+                    message=message,
                     endpoint_or_file=route.file_path,
                     line=route.line,
                     curl_poc=(
@@ -1480,6 +1490,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--workspace", default=ws_env)
     parser.add_argument("--config", default=None, help="Path to .prufgate/config.yaml")
+    parser.add_argument("--base", default=None, help="Read the PrufGate configuration as it is at this base ref (changed-files runs)")
     parser.add_argument("--output", "--json-out", dest="output", default=None)
     parser.add_argument("--static-only", action="store_true", help="Run only static route & query scoping checks")
     parser.add_argument("--token-a", default=None, help="Bearer token for tenant A (or PRUFGATE_TEST_PROBE_TOKEN_A)")
@@ -1504,7 +1515,7 @@ def main(argv: list[str] | None = None) -> int:
     output_path = Path(args.output or f"{workspace}/reports/raw/bola_matrix.json")
 
     try:
-        cfg = PrufGateConfig.load(workspace, args.config)
+        cfg = PrufGateConfig.load(workspace, args.config, ref=args.base)
         findings: list[BolaFinding] = []
         if args.target and not args.static_only:
             if check_server_active(args.target):
@@ -1512,6 +1523,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"  [BOLA Dynamic Matrix] Target {args.target} not reachable. Skipping dynamic network probes.")
         findings.extend(run_static_matrix_audit(workspace, config=cfg))
+        findings = visible(findings, cfg.enable_low_confidence)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps([f.to_dict() for f in findings], indent=2), encoding="utf-8")
     except ConfigError as e:

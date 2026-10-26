@@ -27,15 +27,15 @@ PrufGate is deterministic: plain Python, no network calls and no LLM unless you 
 | # | Engine | What it catches |
 |---|---|---|
 | 1 | Anti-fabrication (`prufgate/anti_fabrication`) | Canned success on error paths, simulated return values, `MOCK_*`/`SAMPLE_*` data in production code, stub UI handlers, fake "fresh" timestamps, unimplemented stubs, LLM prompts that ask for a verdict without passing any evidence, documentation addresses in production. |
-| 2 | Test integrity (`prufgate/anti_reward_hacking`) | Tests with no assertions, assertions that cannot fail, tests that mock the unit under test, swallowed exceptions, assertions deleted or weakened in a diff, production code special-casing a test's literal input. |
-| 3 | Diff guard (`prufgate/diff_guard`) | Skips and focus (`.skip`, `.only`, `xit`, `pytest.mark.skip`, `t.Skip()`, `#[ignore]`, `@Disabled`) added without an issue reference, bare suppressions (`@ts-ignore`, `# noqa`, `// nolint`, `#[allow]`), `as unknown as T` casts, weakened linter/CI/coverage settings, and new exemptions in PrufGate's own config. |
+| 2 | Test integrity (`prufgate/anti_reward_hacking`) | Tests with no assertions, assertions that cannot fail, tests that mock the unit under test, swallowed exceptions, assertions deleted or weakened in a diff, test files deleted or test cases removed in a diff, production code special-casing a test's literal input. |
+| 3 | Diff guard (`prufgate/diff_guard`) | Skips and focus (`.skip`, `.only`, `xit`, `pytest.mark.skip`, `t.Skip()`, `#[ignore]`, `@Disabled`) added without an issue reference, fake exits (`sys.exit(0)`, `process.exit(0)`, module-level `SkipTest`) added to tests or test setup, bare suppressions (`@ts-ignore`, `# noqa`, `// nolint`, `#[allow]`), `as unknown as T` casts, weakened linter/CI/coverage settings, and new exemptions in PrufGate's own config. |
 | 4 | Contract guard (`prufgate/contract_guard`) | Imports not declared in `package.json`, `pyproject.toml`/`requirements*.txt`, `go.mod` or `Cargo.toml`; environment variables read without a default and missing from `.env.example`; frontend calls to API routes that do not exist. |
 | 5 | BOLA / IDOR (`prufgate/bola`) | Route handlers that look up a record by a client-supplied ID with no auth guard or no tenant/owner scoping, across Express, Next.js, NestJS, FastAPI, Flask, Django, Go (net/http, Gin, Echo, Chi), Spring, Rails and Laravel. Optional live two-token probing of a running service you own. |
 | 6 | Diff reviewer (`prufgate/review`) | High-precision rules on changed lines (SQL built from strings, shell injection, disabled TLS verification, hard-coded credentials, unsanitised HTML, ignored Go errors, credential logging), GitHub suggestion blocks, and optional delegation to an AI CLI or API you choose. |
 
 Details, rule IDs, supported languages and known limits for each engine: [docs/ENGINES.md](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/ENGINES.md).
 
-PrufGate uses pattern and structure heuristics, not a full parser for every language. It will miss things and it will sometimes flag correct code. Every finding names its rule, and [inline `prufgate-ignore` comments, exemptions and baselines](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CONFIGURATION.md#suppressing-findings) let you record why.
+PrufGate uses pattern and structure heuristics, not a full parser for every language. It will miss things and it will sometimes flag correct code. Every finding names its rule, and [inline `prufgate-ignore: rule -- reason` comments, exemptions and baselines](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CONFIGURATION.md#suppressing-findings) let you record why.
 
 ## Quick start
 
@@ -64,6 +64,17 @@ Or add the GitHub Action to a pull-request workflow, pinned to the commit SHA of
 
 Every release is signed and carries build provenance and an SBOM: [Verify a release](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/SECURITY.md#verify-a-release).
 
+Or add it to your [pre-commit](https://pre-commit.com) configuration, `.pre-commit-config.yaml` ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CI_INTEGRATION.md#pre-commit)):
+
+```yaml
+repos:
+  - repo: https://github.com/GuardianVigil-Labs/Prufgate
+    rev: v1.0.0
+    hooks:
+      - id: prufgate          # changed files, on every commit
+      - id: prufgate-full     # whole repository, before a push (pre-commit install --hook-type pre-push)
+```
+
 Then, in your project:
 
 ```bash
@@ -83,6 +94,7 @@ Exit codes are the same everywhere: **0** clean, **1** blocking findings (P0/P1)
 | The full gate with SARIF and Markdown reports | `./prufgate.sh fast` (changed files) or `./prufgate.sh full`, from a checkout. Reports go to `reports/prufgate.sarif` and `reports/prufgate-review.md`. |
 | A pull-request gate on GitHub | The composite action in this repository: [docs/CI_INTEGRATION.md](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CI_INTEGRATION.md) |
 | A coding agent sent back to fix its findings before it stops | `prufgate init --hooks` (Claude Code Stop hook, which asks once; Cursor rule; the pre-commit hook and the CI gate enforce) |
+| A coding agent stopped from skipping hooks, force-pushing or deleting tests and CI config | `prufgate init --hooks` (Claude Code, Cursor) or `--agent copilot\|codex\|gemini`: fail-closed hooks running `prufgate hook <agent> <event>` ([support table](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/AGENT_HOOKS.md)) |
 | Tools for an agent over MCP | `prufgate mcp`: nine read-only tools |
 | A service that scans on webhook | `prufgate api`: bearer token, loopback by default |
 
@@ -104,6 +116,8 @@ exempt:
 known_debt:
   stub-click-handler: 0                # a ceiling that can only go down
 ```
+
+In a pull request (any run with a base ref) PrufGate reads this file as it is on the base branch, so configuration changes take effect after merge: a change cannot exempt its own findings.
 
 ## Documentation
 
