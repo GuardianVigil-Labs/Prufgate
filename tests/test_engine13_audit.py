@@ -370,8 +370,8 @@ class CannedCatchComments(unittest.TestCase):
         self.assertEqual(self.rules(" /* note */"), {"canned-error-fallback"})
 
     def test_scoped_ignore_for_another_rule_does_not_suppress(self):
-        self.assertEqual(self.rules(" // prufgate-ignore: some-other-rule -- x"), {"canned-error-fallback"})
-        src = "function f(){\n  // prufgate-ignore: some-other-rule -- x\n  try { return load(); } catch (e) {\n    return { ok: true };\n  }\n}\n"
+        self.assertEqual(self.rules(" // prufgate-ignore: some-other-rule -- legacy path"), {"canned-error-fallback"})
+        src = "function f(){\n  // prufgate-ignore: some-other-rule -- legacy path\n  try { return load(); } catch (e) {\n    return { ok: true };\n  }\n}\n"
         self.assertEqual({f.rule for f in detector.scan_text("src/a.ts", ".ts", src)}, {"canned-error-fallback"})
         named = src.replace("some-other-rule", "canned-error-fallback")
         self.assertEqual(detector.scan_text("src/a.ts", ".ts", named), [])

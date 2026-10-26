@@ -32,7 +32,9 @@ if str(PRUFGATE_ROOT) not in sys.path:
     sys.path.insert(0, str(PRUFGATE_ROOT))
 
 from prufgate import __version__  # noqa: E402
+from prufgate.config import ConfigError  # noqa: E402
 from prufgate.netguard import target_url_error  # noqa: E402
+from prufgate.rules import low_confidence_enabled, visible  # noqa: E402
 from prufgate.synthesizer.parse_results import safe_write_text  # noqa: E402
 
 # In-memory scan store and active subprocess map
@@ -217,6 +219,18 @@ def execute_scan_worker(scan_id: str, battery: str, workspace: str, target_url: 
     p0 = p1 = p2 = p3 = 0
     counted = False
     findings_error = None
+    # The base the battery compared with (its changed scope writes it; empty means
+    # HEAD): the configuration is read there, like the engines do.
+    ref_file = isolated_reports_dir / "raw" / "base_ref"
+    try:
+        cfg_ref = (ref_file.read_text(encoding="utf-8").strip() or "HEAD") if ref_file.is_file() and not ref_file.is_symlink() else None
+    except OSError:
+        cfg_ref = None
+    try:
+        enable_low = low_confidence_enabled(ws_path, ref=cfg_ref)
+    except ConfigError as e:
+        enable_low, exit_code = False, max(exit_code, 2)
+        stderr = f"{stderr}\nconfig: {e}"
     if not sarif_path.exists():
         findings_error = "no SARIF report was produced"
         if stderr.strip():
@@ -225,7 +239,10 @@ def execute_scan_worker(scan_id: str, battery: str, workspace: str, target_url: 
         try:
             sarif_data = json.loads(sarif_path.read_text(encoding="utf-8"))
             for run in sarif_data.get("runs", []):
-                for res in run.get("results", []):
+                # Only the findings the gate reports: low-confidence rules stay hidden unless enabled.
+                for res in visible(run.get("results", []), enable_low):
+                    if res.get("suppressions"):
+                        continue  # an honoured inline ignore: listed, never counted
                     sev = (res.get("properties") or {}).get("severity") or {"error": "P1", "warning": "P2"}.get(res.get("level"), "P3")
                     if sev == "P0":
                         p0 += 1

@@ -71,7 +71,7 @@ class Tools(unittest.TestCase):
             self.assertTrue(res["passed"], name)
 
     def test_fabrication_is_reported_and_fails(self):
-        (self.ws / "src" / "fake.ts").write_text("export const SAMPLE_USERS = [{ id: 1, name: 'Demo' }];\n", encoding="utf-8")
+        (self.ws / "src" / "fake.ts").write_text('export function listUsers() {\n  throw new Error("TODO");\n}\n', encoding="utf-8")
         res = mcp.prufgate_anti_fabrication(workspace_path=str(self.ws))
         self.assertEqual(res["status"], "ok")
         self.assertFalse(res["passed"])

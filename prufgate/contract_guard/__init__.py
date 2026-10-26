@@ -44,6 +44,7 @@ from prufgate.contract_guard.env_guard import (  # noqa: E402
     load_documented_env_vars,
     scan_file_env_drift,
 )
+from prufgate.contract_guard.registry_check import check_new_dependencies  # noqa: E402
 from prufgate.contract_guard.route_contract import (  # noqa: E402
     build_backend_api_index,
     scan_file_route_contracts,
@@ -109,7 +110,7 @@ def scan_contract_guard(
     base: str | None = None,
 ) -> list[Finding]:
     """Run Ghost Dependency, Env Drift, and API Route Contract checks across `workspace`."""
-    cfg = config or (PrufGateConfig.load(workspace) if (workspace / ".prufgate").exists() else PrufGateConfig())
+    cfg = config or (PrufGateConfig.load(workspace, ref=base) if base or (workspace / ".prufgate").exists() else PrufGateConfig())
     manifests: WorkspaceManifests = load_declared_dependencies(workspace)
     documented_env: set[str] | None = load_documented_env_vars(workspace)
     api_index = build_backend_api_index(workspace)
@@ -145,6 +146,20 @@ def scan_contract_guard(
         # 3. Frontend-to-Backend Route Mismatch (`frontend-backend-route-mismatch`)
         if api_index and not cfg.is_exempt(rel_path, "frontend-backend-route-mismatch"):
             findings.extend(scan_file_route_contracts(file_path, rel_path, content, api_index))
+
+    # 4. Registry check for newly added dependencies (opt-in: it needs the network)
+    if cfg.registry_check or os.environ.get("PRUFGATE_REGISTRY_CHECK") == "1":
+        findings.extend(
+            f
+            for f in check_new_dependencies(
+                workspace,
+                base,
+                max_age_days=cfg.registry_max_age_days,
+                max_lookups=cfg.registry_max_lookups,
+                offline_ok=cfg.registry_offline_ok,
+            )
+            if not cfg.is_excluded(f.path) and not cfg.is_exempt(f.path, f.rule)
+        )
 
     return findings
 
@@ -272,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     base = args.base or (args.changed if isinstance(args.changed, str) else None)
     try:
-        cfg = PrufGateConfig.load(workspace, args.config)
+        cfg = PrufGateConfig.load(workspace, args.config, ref=base)
         findings = scan_contract_guard(workspace, changed_only=bool(args.changed), config=cfg, base=base)
     except ConfigError as e:
         print(f"contract_guard: {e}", file=sys.stderr)

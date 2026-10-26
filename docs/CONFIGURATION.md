@@ -4,6 +4,17 @@ PrufGate runs with sensible defaults and no configuration. To tune it, add one o
 
 `prufgate init` writes a starter file. An invalid file (bad YAML, an unknown pack, a reason missing where one is required, invalid UTF-8) stops the run with exit 2 and a message naming the problem.
 
+## Configuration changes take effect after merge
+
+When a run compares against a base ref (`prufgate check --changed` or `--base`, `PRUFGATE_BASE_REF`, `GITHUB_BASE_REF` in a pull request, `prufgate.sh fast`), every engine reads the configuration and the baseline as they are at the base (`git show`), not from the working tree. A change cannot switch off the checks that review it: an exemption, exclusion, debt entry or baseline entry added in a pull request applies only once that pull request is merged.
+
+- The run reports the edit as `prufgate-config-not-applied` (P2, informational) and says it used the base configuration, or the defaults when the base has none. An edit that loosens the gate is also a `prufgate-config-self-exemption` blocker (see below).
+- Without a base ref (a full sweep, a repository's first commit, or a local `prufgate check` with uncommitted changes and no base) the working-tree files are used, so you can try a configuration locally.
+- A base ref git cannot read (a typo, or a shallow CI clone without it) stops the run with exit 2.
+- A base configuration that this PrufGate version rejects (for example a key a newer version removed) is not the change's doing, since it is already merged. The run applies the branch's configuration instead, which must itself be valid or the run stops with exit 2, and reports `prufgate-config-base-invalid` (P2). The diff lines of the configuration are still checked, so the change that fixes the file is not blocked.
+- There is no override. A maintainer who changes the configuration on purpose merges the change; the next runs apply it.
+- A `--config` file outside the repository belongs to the operator, not the change, and is read from disk.
+
 ## Keys
 
 | Key | Type | Default | Meaning |
@@ -19,8 +30,23 @@ PrufGate runs with sensible defaults and no configuration. To tune it, add one o
 | `evidence_markers` | list of regexes | common forms | Patterns that show runtime evidence is passed into a prompt. |
 | `exempt` | see below | none | Per-path rule exemptions, each with a reason. |
 | `known_debt` | see below | none | Ratcheting ceilings for rules you cannot fix yet. |
+| `registry_check` | `true`, `false` or a mapping | `false` | Look up dependencies added in the diff on their public registry (engine 4). See [registry check](#registry-check). |
+| `enable_low_confidence` | boolean | `false` | Turn on low-confidence rules. See [confidence](#confidence). |
 
 Paths in `exclude`, `exempt` and `known_debt` match a file exactly, a directory and everything below it, or a glob (`src/legacy/**`). They never match a substring, so `a.ts` does not cover `data.ts`.
+
+## Registry check
+
+Off by default because it needs the network. `true` turns it on with the defaults; a mapping turns it on with settings:
+
+```yaml
+registry_check:
+  max_age_days: 30   # a first release younger than this is dependency-recently-published (P1)
+  max_lookups: 50    # registry requests per run; more new names than this stop the run (exit 2)
+  offline_ok: false  # true: a failed lookup is printed and skipped instead of stopping the run
+```
+
+A failed lookup stops the run with exit 2 unless `offline_ok` is `true`. Lookups are cached for 24 hours outside the repository. Rules, endpoints and limits: [ENGINES.md](ENGINES.md#registry-check-for-new-dependencies-opt-in).
 
 ## Packs
 
@@ -33,17 +59,37 @@ Packs switch rules of engine 1 on or off. Engine 5 (BOLA) always runs; tune it w
 | `ai-safety` | on | LLM prompts that ask for a decision with no evidence passed in. |
 | `cti` | **off** | Rules for threat-intelligence products: hard-coded verdicts and attributions, zero JARM fingerprints, the empty-input digest used as a sample, model-generated intelligence. Turn it on only if you build such a product. |
 
+## Confidence
+
+Every rule has a confidence, listed in the rule tables of [ENGINES.md](ENGINES.md) and carried by each finding (`confidence` in JSON, a tag in the Markdown report, `properties.confidence` on SARIF results and `properties.precision` on SARIF rules):
+
+| Confidence | Meaning |
+|---|---|
+| `high` | An exact structural match: a hit is almost always what the rule names. |
+| `medium` | A heuristic with known false positives. |
+| `low` | A fuzzy or naming-based heuristic. **Off by default.** |
+
+A rule that is off is not reported and does not block, everywhere PrufGate reports: the gate, `prufgate check`, `review`, `bola` and `test-audit`, the MCP tools and the REST API. `enable_low_confidence: true` turns the low rules on, with their usual severity, so a low P0 finding blocks like any other. Rules from other tools (gitleaks, zizmor, your own ast-grep rules) and AI review comments count as `medium`. A change that sets `enable_low_confidence` back to `false` is reported as `prufgate-config-self-exemption`.
+
+```yaml
+enable_low_confidence: true
+```
+
 ## Suppressing findings
 
 Give every suppression a reason, so a reviewer can see why a finding was accepted (exempt forms 1 and 3 require one).
 
-**Inline**, on the line or the line above:
+**Inline**, on the line or on a comment line just above it:
 
 ```ts
 return cachedPrices; // prufgate-ignore: route-canned-fallback -- served from the documented offline cache
 ```
 
-Engine 3 flags a new `prufgate-ignore` added without a justification, like any other bare suppression.
+- Name one or more rules, separated by commas (`prufgate-ignore: rule-a, rule-b -- reason`), or none to cover every rule on that line (`prufgate-ignore -- reason`). Engine 6 rules use the ID the report shows, for example `pr-disabled-tls-certificate-verification`.
+- **The reason is required.** Write it after `--` (the older ` - ` separator is still read). An ignore without a reason suppresses nothing: the finding stays, and the report adds an `ignore-without-reason` finding (P2) on that line telling you to add one.
+- **Every honoured ignore is reported.** The Markdown report counts them in its summary and lists each with its reason under "Inline Ignores"; the SARIF report keeps each as a result with an in-source `suppressions` entry and the reason as its `justification`, which GitHub code scanning shows as a dismissed alert. `prufgate check` prints them before its findings, and adds them the same way to `--format sarif`.
+
+Engine 3 also flags a new `prufgate-ignore` added in a diff without a justification, like any other bare suppression.
 
 **`exempt`** accepts three forms; use one per file:
 
@@ -78,9 +124,9 @@ known_debt:
     - { path: src/old/client.ts, reason: "#88: replace the old client" }
 ```
 
-**Baseline** (the `prufgate.sh` gate only): `.prufgate/baseline.yaml`, `.yml` or `.json` holds a list, or a mapping under `ignore`, `ignored` or `baseline`, of `{file, rule}` entries (`file_path` and `rule_id` are accepted too; `"*"` in one field matches any value there; an entry needs a real value in at least one field). Rule names are matched case-insensitively against the report's rule IDs, where anti-fabrication rules carry an `anti-fabrication-` prefix. `prufgate check`, the MCP server and the API do not read the baseline. A baseline file that cannot be parsed is ignored, which keeps every finding.
+**Baseline** (the `prufgate.sh` gate only): `.prufgate/baseline.yaml`, `.yml` or `.json` holds a list, or a mapping under `ignore`, `ignored` or `baseline`, of `{file, rule}` entries (`file_path` and `rule_id` are accepted too; `"*"` in one field matches any value there; an entry needs a real value in at least one field). Rule names are matched case-insensitively against the report's rule IDs, where anti-fabrication rules carry an `anti-fabrication-` prefix. `prufgate check`, the MCP server and the API do not read the baseline. A baseline file that cannot be parsed is ignored, which keeps every finding. In a changed-files run the baseline is read at the base ref, like the configuration.
 
-Engine 3 reports a diff that adds a new exemption, debt entry or score owner to the PrufGate config itself (`prufgate-config-self-exemption`), so loosening the gate is always visible in review.
+Engine 3 reports a diff that adds a new exemption, debt entry or score owner to the PrufGate config itself (`prufgate-config-self-exemption`), so loosening the gate is always visible in review. With a base ref the edit is not applied until merge either way.
 
 ## Environment variables
 
@@ -105,5 +151,7 @@ Engine 3 reports a diff that adds a new exemption, debt entry or score owner to 
 | `PRUFGATE_WEBHOOK_SECRET` | API | Turns on `/api/v1/webhook`; deliveries must carry a valid GitHub or GitLab signature. |
 | `PRUFGATE_API_MAX_SCANS`, `PRUFGATE_API_SCAN_TIMEOUT` | API | Concurrent scan limit, and seconds per scan (default 600). |
 | `PRUFGATE_MCP_TIMEOUT` | MCP | Seconds per tool call (default 300). |
+| `PRUFGATE_REGISTRY_CHECK` | engine 4 | `1` turns the registry check on, as `registry_check: true` does. It cannot turn off a check the configuration turns on. |
+| `XDG_CACHE_HOME` | engine 4 | Where the registry check keeps its cache (`prufgate/registry.json`; default `~/.cache`). |
 | `PRUFGATE_ALLOW_LINK_LOCAL` | MCP, API | `1` allows link-local probe targets, which are refused by default (cloud metadata endpoints). |
 | `PRUFGATE_IMAGE`, `PRUFGATE_DIR` | `bin/prufgate` | Image for `--docker` (required: none is published), and the checkout to run. |

@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from prufgate import PROJECT_URL, __version__  # noqa: E402
+from prufgate import PROJECT_URL, __version__, inline_ignore  # noqa: E402
+from prufgate.config import ConfigError, GitDiffError, _diff_base, git_blob, repo_prefix  # noqa: E402
+from prufgate.rules import SARIF_RANK, confidence, low_confidence_enabled, visible  # noqa: E402
+from prufgate.sarif import add_partial_fingerprints  # noqa: E402
 
 # ANSI Color Codes
 RESET = "\033[0m"
@@ -50,11 +53,16 @@ class Finding:
         self.line = line
         self.details = details.strip()
 
+    @property
+    def confidence(self) -> str:
+        return confidence(self.rule_id)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "tool": self.tool,
             "rule_id": self.rule_id,
             "severity": self.severity,
+            "confidence": self.confidence,
             "message": self.message,
             "file": self.file_path,
             "line": self.line,
@@ -217,7 +225,7 @@ def parse_raw_results(raw_dir: Path) -> List[Finding]:
                     findings.append(
                         Finding(
                             tool="pr-reviewer",
-                            rule_id=f"pr-{item.get('title', 'review').lower().replace(' ', '-')}",
+                            rule_id=inline_ignore.review_rule_id(str(item.get("title") or "review")),
                             severity=item.get("severity", "P2"),
                             message=f"{item.get('title')}: {item.get('message')}",
                             file_path=item.get("file", "unknown"),
@@ -328,7 +336,51 @@ def parse_raw_results(raw_dir: Path) -> List[Finding]:
             )
         )
 
+    # 11. Inline prufgate-ignore comments without a reason: they suppressed nothing.
+    for e in inline_ignore.load(raw_dir / SUPPRESSIONS_FILE):
+        if e["kind"] == "missing-reason":
+            findings.append(
+                Finding(
+                    tool=str(e.get("engine") or "prufgate"),
+                    rule_id=inline_ignore.MISSING_REASON_RULE,
+                    severity="P2",
+                    message=f"{inline_ignore.MISSING_REASON_MESSAGE} It names `{e.get('rule')}`, which is still reported.",
+                    file_path=str(e.get("file") or "unknown"),
+                    line=int(e.get("line") or 1),
+                )
+            )
+
     return deduplicate_findings(findings)
+
+
+SUPPRESSIONS_FILE = "suppressions.jsonl"
+# The engines that report a rule under a prefixed ID (see the parsers above).
+_RULE_PREFIX = {"anti-fabrication": "anti-fabrication-"}
+
+
+def load_suppressions(raw_dir: Path) -> List[tuple[Finding, str]]:
+    """Every inline ignore the engines honoured, as (the finding it hid, the reason)."""
+    out: List[tuple[Finding, str]] = []
+    for e in inline_ignore.load(raw_dir / SUPPRESSIONS_FILE):
+        if e["kind"] != "honoured":
+            continue
+        tool = str(e.get("engine") or "prufgate")
+        sev = e.get("severity") if e.get("severity") in SEVERITY_RANK else "P2"
+        out.append(
+            (
+                Finding(
+                    tool=tool,
+                    rule_id=_RULE_PREFIX.get(tool, "") + str(e.get("rule") or "unknown"),
+                    severity=sev,
+                    message=str(e.get("message") or e.get("rule") or "suppressed finding"),
+                    file_path=str(e.get("file") or "unknown"),
+                    line=int(e.get("line") or 1),
+                ),
+                # The reason comes from the scanned repository: one line, no Markdown code breaks.
+                str(e.get("reason") or "").replace("`", "'").replace("|", "/")[:200],
+            )
+        )
+    return out
 
 
 SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -363,19 +415,46 @@ def deduplicate_findings(findings: List[Finding]) -> List[Finding]:
     return list(dedup_map.values())
 
 
-def filter_baseline_findings(findings: List[Finding], workspace_dir: Path) -> List[Finding]:
-    """Filter out findings matching entries in .prufgate/baseline.yaml or .prufgate/baseline.json if present."""
-    candidates = [
-        workspace_dir / ".prufgate" / "baseline.yaml",
-        workspace_dir / ".prufgate" / "baseline.yml",
-        workspace_dir / ".prufgate" / "baseline.json",
-    ]
-    baseline_path = next((p for p in candidates if p.is_file()), None)
-    if baseline_path is None:
-        return findings
+BASELINE_FILES = (".prufgate/baseline.yaml", ".prufgate/baseline.yml", ".prufgate/baseline.json")
+# Written by runners/run_fast.sh in a changed-files run: the base ref it diffed against.
+BASE_REF_FILE = "base_ref"
+
+
+def read_baseline(workspace_dir: Path, ref: Optional[str] = None) -> Optional[tuple]:
+    """(path, text) of the first baseline file, or None. With `ref` it is read as
+    it is at the merge base with that ref, never from the working tree, so a
+    change cannot baseline its own findings. Raises GitDiffError when git cannot
+    read the base: the gate then fails closed."""
+    if ref is None:
+        for rel in BASELINE_FILES:
+            p = workspace_dir / rel
+            if p.is_file():
+                try:
+                    return rel, p.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    return rel, ""
+        return None
+    commit = _diff_base(ref, workspace_dir)
+    prefix = repo_prefix(workspace_dir)
+    for rel in BASELINE_FILES:
+        text = git_blob(commit, prefix + rel, workspace_dir)
+        if text is not None:
+            return rel, text
+    return None
+
+
+def filter_confidence(findings: List[Finding], enable_low_confidence: bool) -> List[Finding]:
+    """Drop findings of low-confidence rules unless the config turns them on."""
+    return visible(findings, enable_low_confidence)
+
+
+def baseline_keys(baseline: Optional[tuple]) -> set:
+    """The (file, rule) pairs a baseline from `read_baseline` ignores ("*" for any)."""
+    if baseline is None:
+        return set()
     try:
-        raw_text = baseline_path.read_text(encoding="utf-8")
-        if baseline_path.suffix.lower() in (".yaml", ".yml"):
+        rel, raw_text = baseline
+        if rel.endswith((".yaml", ".yml")):
             import yaml
 
             data = yaml.safe_load(raw_text) or {}
@@ -392,7 +471,7 @@ def filter_baseline_findings(findings: List[Finding], workspace_dir: Path) -> Li
                 or []
             )
         else:
-            return findings
+            return set()
 
         ignored_keys = set()
         for entry in entries:
@@ -410,18 +489,25 @@ def filter_baseline_findings(findings: List[Finding], workspace_dir: Path) -> Li
                 ignored_keys.add(("*", e_rule))
             elif e_file and raw_rule == "*":
                 ignored_keys.add((e_file, "*"))
-        if not ignored_keys:
-            return findings
-        filtered = []
-        for f in findings:
-            norm_file = re.sub(r"^(?:/workspace/|\./|/)+", "", f.file_path or "workspace")
-            norm_rule = f.rule_id.lower()
-            if (norm_file, norm_rule) in ignored_keys or ("*", norm_rule) in ignored_keys or (norm_file, "*") in ignored_keys:
-                continue
-            filtered.append(f)
-        return filtered
+        return ignored_keys
     except Exception:
+        return set()
+
+
+def filter_baseline_findings(findings: List[Finding], workspace_dir: Path, ref: Optional[str] = None) -> List[Finding]:
+    """Filter out findings matching entries in .prufgate/baseline.yaml or .prufgate/baseline.json if present
+    (at the base ref when one is given)."""
+    ignored_keys = baseline_keys(read_baseline(workspace_dir, ref))
+    if not ignored_keys:
         return findings
+    filtered = []
+    for f in findings:
+        norm_file = re.sub(r"^(?:/workspace/|\./|/)+", "", f.file_path or "workspace")
+        norm_rule = f.rule_id.lower()
+        if (norm_file, norm_rule) in ignored_keys or ("*", norm_rule) in ignored_keys or (norm_file, "*") in ignored_keys:
+            continue
+        filtered.append(f)
+    return filtered
 
 
 # Raw output each runner step writes. An executed step whose output is missing
@@ -532,22 +618,32 @@ SARIF_SECURITY_SEVERITY = {
 }
 
 
-def generate_sarif(findings: List[Finding], output_path: Path, workspace_dir: Optional[Path] = None) -> None:
+def generate_sarif(
+    findings: List[Finding],
+    output_path: Path,
+    workspace_dir: Optional[Path] = None,
+    suppressed: Optional[List[tuple[Finding, str]]] = None,
+) -> None:
+    """Honoured inline ignores are written as results carrying an in-source
+    `suppressions` entry, which code scanning shows as dismissed with the reason."""
     rules_map: Dict[str, Dict[str, Any]] = {}
     results = []
 
-    for f in findings:
+    entries = [(f, None) for f in findings] + [(f, reason) for f, reason in (suppressed or [])]
+    for f, reason in entries:
         if f.rule_id not in rules_map:
             rules_map[f.rule_id] = {
                 "id": f.rule_id,
                 "name": f.rule_id,
                 "shortDescription": {"text": f.message[:100]},
                 "defaultConfiguration": {
-                    "level": "error" if f.severity in ("P0", "P1") else "warning"
+                    "level": "error" if f.severity in ("P0", "P1") else "warning",
+                    "rank": SARIF_RANK[f.confidence],
                 },
                 "properties": {
                     "tags": ["security", "quality", f.tool],
                     "security-severity": SARIF_SECURITY_SEVERITY.get(f.severity, "5.0"),
+                    "precision": f.confidence,
                 },
             }
 
@@ -557,30 +653,33 @@ def generate_sarif(findings: List[Finding], output_path: Path, workspace_dir: Op
 
         norm_uri = _normalize_sarif_uri(f.file_path, workspace_dir)
 
-        results.append(
-            {
-                "ruleId": f.rule_id,
-                "level": level,
-                "message": {"text": f.message},
-                "locations": [
-                    {
-                        "physicalLocation": {
-                            "artifactLocation": {
-                                "uri": norm_uri
-                            },
-                            "region": {"startLine": max(1, int(f.line or 1))},
-                        }
+        result: Dict[str, Any] = {
+            "ruleId": f.rule_id,
+            "level": level,
+            "message": {"text": f.message},
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": norm_uri
+                        },
+                        "region": {"startLine": max(1, int(f.line or 1))},
                     }
-                ],
-                "properties": {
-                    "tool": f.tool,
-                    "severity": f.severity,
-                    "rawTarget": f.file_path,
-                    "details": f.details,
-                },
-            }
-        )
+                }
+            ],
+            "properties": {
+                "tool": f.tool,
+                "severity": f.severity,
+                "confidence": f.confidence,
+                "rawTarget": f.file_path,
+                "details": f.details,
+            },
+        }
+        if reason is not None:
+            result["suppressions"] = [{"kind": "inSource", "justification": reason}]
+        results.append(result)
 
+    add_partial_fingerprints(results, workspace_dir)
     sarif = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -608,8 +707,10 @@ def generate_markdown(
     output_path: Path,
     manifest: Optional[Dict[str, Dict[str, Any]]] = None,
     errors: Optional[Dict[str, str]] = None,
+    suppressed: Optional[List[tuple[Finding, str]]] = None,
 ) -> None:
     workspace, commit = get_git_info()
+    suppressed = suppressed or []
     errors = errors or {}
     p0 = [f for f in findings if f.severity == "P0"]
     p1 = [f for f in findings if f.severity == "P1"]
@@ -672,6 +773,7 @@ def generate_markdown(
             rows.append(
                 f"### [{f.severity}] `{f.rule_id}` in `{f.file_path}:{f.line}`\n"
                 f"- **Engine:** `{f.tool}`\n"
+                f"- **Confidence:** {f.confidence}\n"
                 f"- **Finding:** {f.message}\n"
                 + (f"- **Details:** `{f.details}`\n" if f.details else "")
                 + "- **Action:** Immediate remediation required.\n"
@@ -684,10 +786,23 @@ def generate_markdown(
     else:
         rows = []
         for f in advisory_findings[:30]:
-            rows.append(f"- **[{f.severity}]** `{f.file_path}:{f.line}` — {f.message} (`{f.rule_id}` via `{f.tool}`)")
+            rows.append(
+                f"- **[{f.severity}, {f.confidence} confidence]** `{f.file_path}:{f.line}` — {f.message} (`{f.rule_id}` via `{f.tool}`)"
+            )
         if len(advisory_findings) > 30:
             rows.append(f"\n_... and {len(advisory_findings) - 30} more advisories (see reports/prufgate.sarif)_")
         adv_sec = "\n".join(rows)
+
+    if not suppressed:
+        ign_sec = "No inline `prufgate-ignore` comments suppressed a finding."
+    else:
+        rows = [
+            f"- `{f.file_path}:{f.line}` `{f.rule_id}` [{f.severity}, {f.confidence} confidence] via `{f.tool}` — {reason}"
+            for f, reason in suppressed[:50]
+        ]
+        if len(suppressed) > 50:
+            rows.append(f"\n_... and {len(suppressed) - 50} more (see reports/prufgate.sarif)_")
+        ign_sec = "\n".join(rows)
 
     default_template = """# PrufGate Verification Report
 
@@ -708,6 +823,7 @@ PrufGate audited `{WORKSPACE_NAME}` across its 6 core verification engines (Prod
 | **P1 (High)** | {COUNT_P1} | {BLOCKER_P1} |
 | **P2 (Medium)** | {COUNT_P2} | Non-blocking |
 | **P3 (Low / Info)** | {COUNT_P3} | Non-blocking |
+| **Inline ignores** | {COUNT_IGNORED} | Suppressed with a reason (section 5) |
 
 ---
 
@@ -731,7 +847,13 @@ PrufGate audited `{WORKSPACE_NAME}` across its 6 core verification engines (Prod
 
 ---
 
-## 5. Audit Sign-off
+## 5. Inline Ignores
+
+{IGNORED_SECTION}
+
+---
+
+## 6. Audit Sign-off
 
 - **SARIF Specification:** SARIF 2.1.0 emitted to `reports/prufgate.sarif`
 - **Verdict:** {VERDICT_TEXT}
@@ -755,6 +877,8 @@ PrufGate audited `{WORKSPACE_NAME}` across its 6 core verification engines (Prod
         SCANNER_ROWS="\n".join(scanner_rows) if scanner_rows else "| `All Engines` | 0 | 0 | 0 | 0 | 🟢 PASS |",
         CRITICAL_FINDINGS_SECTION=crit_sec,
         ADVISORY_FINDINGS_SECTION=adv_sec,
+        COUNT_IGNORED=len(suppressed),
+        IGNORED_SECTION=ign_sec,
         VERDICT_TEXT=verdict_text,
     )
 
@@ -826,13 +950,63 @@ def main() -> None:
         sys.exit(2)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
+    # A config that does not load is an error (the run cannot pass), reported like a crashed engine.
+    ref_file = raw_dir / BASE_REF_FILE
+    base_ref = (ref_file.read_text(encoding="utf-8").strip() if ref_file.is_file() else "") or None
+    if ref_file.is_file() and base_ref is None:
+        # A changed scan of the working-tree diff: it compares with HEAD, so an
+        # uncommitted baseline or config edit must not apply to it either.
+        base_ref = "HEAD"
+    config_error = ""
+    try:
+        enable_low = low_confidence_enabled(workspace_dir, ref=base_ref)
+    except ConfigError as exc:
+        config_error, enable_low = str(exc), False
+
     findings = parse_raw_results(raw_dir)
-    findings = filter_baseline_findings(findings, workspace_dir)
+    try:
+        head_baseline = read_baseline(workspace_dir) if base_ref else None
+        base_baseline = read_baseline(workspace_dir, base_ref) if base_ref else None
+        if head_baseline != base_baseline:
+            findings.append(
+                Finding(
+                    tool="prufgate-gate",
+                    rule_id="prufgate-config-not-applied",
+                    severity="P2",
+                    message="This change edits the PrufGate baseline. This run applied the baseline at the base ref "
+                    "and ignored the branch's: baseline changes take effect after merge.",
+                    file_path=(head_baseline or base_baseline)[0],
+                )
+            )
+        # Like a configuration exemption: an entry the branch adds silences a
+        # finding once merged, so it needs a maintainer's review.
+        for e_file, e_rule in sorted(baseline_keys(head_baseline) - baseline_keys(base_baseline)):
+            findings.append(
+                Finding(
+                    tool="prufgate-gate",
+                    rule_id="prufgate-config-self-exemption",
+                    severity="P1",
+                    message=f"This change adds `{e_rule}` in `{e_file}` to the PrufGate baseline. "
+                    "A change that silences PrufGate needs a maintainer's review.",
+                    file_path=head_baseline[0],
+                )
+            )
+        findings = filter_confidence(findings, enable_low)
+        findings = filter_baseline_findings(findings, workspace_dir, base_ref)
+    except GitDiffError as e:
+        print(f"prufgate: cannot read the baseline at base ref {base_ref!r}: {e}", file=sys.stderr)
+        sys.exit(2)
     manifest = load_execution_manifest(raw_dir)
     errors = engine_errors(raw_dir, manifest)
+    if config_error:
+        errors["config"] = config_error
 
-    generate_sarif(findings, reports_dir / "prufgate.sarif", workspace_dir=workspace_dir)
-    generate_markdown(findings, None, reports_dir / "prufgate-review.md", manifest=manifest, errors=errors)
+    suppressed = load_suppressions(raw_dir)
+
+    generate_sarif(findings, reports_dir / "prufgate.sarif", workspace_dir=workspace_dir, suppressed=suppressed)
+    generate_markdown(
+        findings, None, reports_dir / "prufgate-review.md", manifest=manifest, errors=errors, suppressed=suppressed
+    )
     print_ansi_table(findings, manifest=manifest, errors=errors)
 
     if errors:

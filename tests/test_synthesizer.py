@@ -6,6 +6,8 @@ execution manifest integration, and GitHub SARIF 2.1.0 URI normalization.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,7 @@ PRUFGATE_ROOT = Path(__file__).resolve().parent.parent
 if str(PRUFGATE_ROOT) not in sys.path:
     sys.path.insert(0, str(PRUFGATE_ROOT))
 
+from prufgate.config import GitDiffError
 from prufgate.synthesizer.parse_results import (
     Finding,
     deduplicate_findings,
@@ -125,6 +128,58 @@ class SynthesizerTest(unittest.TestCase):
         filtered = filter_baseline_findings(findings, self.ws)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0].file_path, "src/active.ts")
+
+    def _git(self, *args: str) -> None:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=self.ws, check=True, capture_output=True)
+
+    def test_baseline_is_read_at_the_base_ref(self):
+        """A change that baselines its own finding: with a base ref the branch's baseline is ignored."""
+        self._git("init", "-q", "-b", "main")
+        (self.ws / "README.md").write_text("notes\n")
+        self._git("add", "README.md")
+        self._git("commit", "-qm", "base")
+        self._git("checkout", "-qb", "feature")
+        (self.ws / ".prufgate").mkdir()
+        (self.ws / ".prufgate" / "baseline.yaml").write_text("- {file: src/app.py, rule: unimplemented-production-stub}\n")
+        self._git("add", ".prufgate")
+        self._git("commit", "-qm", "feature")
+        found = [Finding(tool="anti-fabrication", rule_id="unimplemented-production-stub", severity="P0", message="x", file_path="src/app.py")]
+        self.assertEqual(filter_baseline_findings(found, self.ws), [])
+        self.assertEqual(len(filter_baseline_findings(found, self.ws, "main")), 1)
+        with self.assertRaises(GitDiffError):
+            filter_baseline_findings(found, self.ws, "no-such-ref")
+        # The gate: the finding stays, a P2 notice says the baseline was ignored, and a bad base exits 2.
+        env = {**os.environ, "WORKSPACE": str(self.ws), "PRUFGATE_REPORTS_DIR": str(self.ws / "reports"), "NO_COLOR": "1"}
+        (self.raw_dir / "anti_fabrication.json").write_text(json.dumps([{"rule": "unimplemented-production-stub", "file": "src/app.py", "line": 1, "text": "x"}]))
+        (self.raw_dir / "execution_manifest.jsonl").write_text(
+            json.dumps({"tool": "anti-fabrication", "status": "executed", "exit_code": 1, "duration_seconds": 1.0, "note": ""}) + "\n"
+            + "".join(
+                json.dumps({"tool": t, "status": "skipped", "exit_code": 0, "duration_seconds": 0.0, "note": "test"}) + "\n"
+                for t in ("test-integrity", "diff-guard", "contract-guard", "bola-matrix", "pr-reviewer")
+            )
+        )
+        script = str(PRUFGATE_ROOT / "prufgate" / "synthesizer" / "parse_results.py")
+        (self.raw_dir / "base_ref").write_text("main\n")
+        res = subprocess.run([sys.executable, script], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        sarif = (self.ws / "reports" / "prufgate.sarif").read_text()
+        self.assertIn("prufgate-config-not-applied", sarif)
+        self.assertIn("unimplemented-production-stub", sarif)
+        # The entry the branch adds is itself a blocking self-exemption.
+        added = [r for run in json.loads(sarif)["runs"] for r in run["results"] if r["ruleId"] == "prufgate-config-self-exemption"]
+        self.assertEqual([r["properties"]["severity"] for r in added], ["P1"])
+        (self.raw_dir / "base_ref").write_text("no-such-ref\n")
+        res = subprocess.run([sys.executable, script], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        # A changed scan of the working-tree diff (empty base): the baseline is the one committed at HEAD.
+        self._git("checkout", "-q", "main")
+        self.assertFalse((self.ws / ".prufgate" / "baseline.yaml").exists())
+        (self.ws / ".prufgate").mkdir()
+        (self.ws / ".prufgate" / "baseline.yaml").write_text("- {file: src/app.py, rule: unimplemented-production-stub}\n")
+        (self.raw_dir / "base_ref").write_text("\n")
+        res = subprocess.run([sys.executable, script], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("unimplemented-production-stub", (self.ws / "reports" / "prufgate.sarif").read_text())
 
     def test_sarif_normalization_and_manifest_markdown(self):
         manifest_path = self.raw_dir / "execution_manifest.jsonl"

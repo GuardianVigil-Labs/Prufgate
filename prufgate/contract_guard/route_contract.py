@@ -16,6 +16,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
+from prufgate import inline_ignore  # noqa: E402
 from prufgate.bola.bola_engine import DiscoveredRoute, discover_all_routes  # noqa: E402
 from prufgate.contract_guard.dependency_guard import Finding  # noqa: E402
 
@@ -132,8 +133,6 @@ def scan_file_route_contracts(
 
     seen_locs: set[tuple[int, str, str]] = set()
     for line_no, method, raw_url, snippet in calls:
-        if "prufgate-ignore" in snippet.lower():
-            continue
         key = (line_no, method, raw_url)
         if key in seen_locs:
             continue
@@ -177,4 +176,9 @@ def scan_file_route_contracts(
                 )
             )
 
-    return findings
+    return [
+        f for f in findings
+        if not inline_ignore.suppressed_at(
+            lines, f.line, f.rule, engine="contract-guard", path=norm_rel, severity=f.severity, message=f.message
+        )
+    ]

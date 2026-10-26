@@ -21,6 +21,10 @@ plus git diffs (working tree, untracked files included) to detect AI coding agen
      tests that swallow errors so failing assertions or calls pass silently.
   7. snapshot-blind-update-or-empty (P1): Empty or trivial inline snapshots
      (toMatchInlineSnapshot(""), toMatchInlineSnapshot("null")).
+  8. diff-test-file-deleted (P1): a diff deletes a test file whose tests are not added back
+     in another file (a git rename or a move keeps them).
+  9. diff-test-count-drop (P1): a diff removes more test cases (`def test_*`, `it(`/`test(`,
+     Go `func Test*`) than it adds, across all files.
 
 CLI Usage:
   python3 prufgate/anti_reward_hacking/test_integrity.py [paths...]
@@ -39,8 +43,8 @@ from __future__ import annotations
 import ast
 import json
 import re
-import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -49,7 +53,16 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
-from prufgate.config import ConfigError, PrufGateConfig  # noqa: E402
+from prufgate import inline_ignore  # noqa: E402
+from prufgate.config import (  # noqa: E402, F401 -- git helpers re-exported for the other engines
+    EMPTY_TREE,
+    ConfigError,
+    GitDiffError,
+    PrufGateConfig,
+    _diff_base,
+    _git,
+)
+from prufgate.rules import visible  # noqa: E402
 
 
 @dataclass
@@ -108,6 +121,7 @@ class DiffFileHunk:
     added_lines: list[tuple[int, str]] = field(default_factory=list)
     removed_lines: list[tuple[int, str]] = field(default_factory=list)
     context_lines: list[tuple[int, str]] = field(default_factory=list)
+    ordered: list[tuple[str, str]] = field(default_factory=list)  # ("+" | "-" | " ", text) in diff order
 
 
 TEST_FILE_SUFFIXES = (
@@ -997,7 +1011,7 @@ def _check_self_mocked_sut(
         )
         for idx, raw in enumerate(lines, start=1):
             s = raw.strip()
-            if s.startswith(("//", "/*", "*")) or "prufgate-ignore" in s.lower():
+            if s.startswith(("//", "/*", "*")):
                 continue
             if mock_mod_re.search(s):
                 # Allow partial mocks that call importActual / requireActual in the surrounding 6 lines
@@ -1231,7 +1245,7 @@ def scan_test_file(
     seen_tautology_lines: set[int] = set()
     for ln, raw in lines_to_scan:
         s = raw.strip()
-        if not s or s.startswith(("#", "//", "/*", "*")) or "prufgate-ignore" in s.lower():
+        if not s or s.startswith(("#", "//", "/*", "*")):
             continue
         if ln not in seen_tautology_lines:
             for pat in TAUTOLOGY_PATTERNS:
@@ -1269,8 +1283,9 @@ def scan_test_file(
     for f in raw_findings:
         if cfg.is_exempt(rel_path, f.rule):
             continue
-        line_text = lines[f.line - 1] if 1 <= f.line <= len(lines) else ""
-        if "prufgate-ignore" in line_text.lower():
+        if inline_ignore.suppressed_at(
+            lines, f.line, f.rule, engine="test-integrity", path=rel_path, severity=f.severity, message=f.message
+        ):
             continue
         filtered.append(f)
 
@@ -1324,12 +1339,15 @@ def _parse_diff_into_hunks(diff_text: str) -> list[DiffFileHunk]:
         elif current_hunk is not None:
             if raw_line.startswith("+") and not raw_line.startswith("+++"):
                 current_hunk.added_lines.append((new_ln, raw_line[1:]))
+                current_hunk.ordered.append(("+", raw_line[1:]))
                 new_ln += 1
             elif raw_line.startswith("-") and not raw_line.startswith("---"):
                 current_hunk.removed_lines.append((old_ln, raw_line[1:]))
+                current_hunk.ordered.append(("-", raw_line[1:]))
                 old_ln += 1
             elif raw_line.startswith(" "):
                 current_hunk.context_lines.append((new_ln, raw_line[1:]))
+                current_hunk.ordered.append((" ", raw_line[1:]))
                 old_ln += 1
                 new_ln += 1
 
@@ -1409,6 +1427,184 @@ def _extract_test_literals_from_lines(lines: list[tuple[int, str]]) -> dict[str,
     return literals
 
 
+# Test cases a diff adds or removes, by name. A test that moves to another file
+# or is renamed keeps the count; one that disappears lowers it.
+_PY_TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+(test\w*)\s*\(")
+_JS_TEST_CALL_RE = re.compile(r"""^\s*(?:it|test)(?:\.\w+)*\s*\(\s*(["'`])(.*?)\1""")
+_GO_TEST_FUNC_RE = re.compile(r"^func\s+(Test(?!Main\b)\w*)\s*\(")
+_JS_TEST_SUFFIXES = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
+
+
+def _open_block_after(line: str, state: str | None, py: bool) -> str | None:
+    """The string or comment still open at the end of `line` (a closing delimiter), given the
+    one open at its start: a Python triple-quoted string, a JS/Go block comment or backtick string."""
+    i, n = 0, len(line)
+    while i < n:
+        if state:
+            j = line.find(state, i)
+            if j < 0:
+                return state
+            i, state = j + len(state), None
+            continue
+        c = line[i]
+        if (py and c == "#") or (not py and line.startswith("//", i)):
+            return None
+        if py and line.startswith(('"""', "'''"), i):
+            state, i = line[i : i + 3], i + 3
+        elif not py and line.startswith("/*", i):
+            state, i = "*/", i + 2
+        elif not py and c == "`":
+            state, i = "`", i + 1
+        elif c in "\"'":
+            j = i + 1
+            while j < n and line[j] != c:
+                j += 2 if line[j] == "\\" else 1
+            i = j + 1
+        else:
+            i += 1
+    return state
+
+
+def _test_case_names(path: str, lines: list[tuple[str, str]], kinds: str) -> list[str]:
+    """Test definitions on the lines whose kind is in `kinds`, skipping lines that start inside
+    a docstring, block comment or multi-line string (`lines` is the hunk in order, for that state)."""
+    sfx = Path(path).suffix.lower()
+    rx = {".py": _PY_TEST_DEF_RE, ".go": _GO_TEST_FUNC_RE}.get(sfx) or (_JS_TEST_CALL_RE if sfx in _JS_TEST_SUFFIXES else None)
+    if rx is None:
+        return []
+    names: list[str] = []
+    state: str | None = None
+    for kind, raw in lines:
+        inside = state is not None
+        state = _open_block_after(raw, state, sfx == ".py")
+        if kind in kinds and not inside and (m := rx.match(raw)):
+            names.append(m.group(m.lastindex or 1))
+    return names
+
+
+def _collected(path: str) -> bool:
+    """A file the test runner collects by default (`tests/helpers.py` is a test file to PrufGate,
+    but pytest never runs it)."""
+    p = Path(path)
+    name, sfx = p.name, p.suffix.lower()
+    if sfx == ".py":
+        return name.startswith("test_") or name.endswith("_test.py")
+    if sfx == ".go":
+        return name.endswith("_test.go")
+    if sfx in _JS_TEST_SUFFIXES:
+        return bool(re.search(r"\.(?:test|spec)\.[cm]?[jt]sx?$", name)) or "__tests__" in p.parts
+    return is_test_file(path)
+
+
+def _side(h: DiffFileHunk, side: str) -> list[tuple[str, str]]:
+    return [(k, t) for k, t in h.ordered if k in (side, " ")]
+
+
+def _removed_test_findings(
+    hunks: list[DiffFileHunk],
+    cfg: PrufGateConfig,
+    renames: dict[str, str] | None = None,
+    repo_root: Path | None = None,
+) -> list[Finding]:
+    """`diff-test-file-deleted` and `diff-test-count-drop`: tests removed and not added back anywhere.
+    A test file renamed to a name the test runner does not collect counts as deleted."""
+    removed: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    deleted: set[str] = set()
+    new_files: set[str] = set()
+    first_hunk: dict[str, int] = {}
+    hidden = {old: new for old, new in (renames or {}).items() if _collected(old) and not _collected(new) and not cfg.is_excluded(old)}
+    for old, new in hidden.items():
+        names: list[str] = []
+        content = None
+        if repo_root is not None:
+            try:
+                content = (Path(repo_root) / new).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                content = None
+        for h in hunks:
+            if h.file_path == new:
+                names += _test_case_names(old, _side(h, "-"), "-" if content is not None else "- ")
+        if content is not None:
+            names += _test_case_names(old, [(" ", t) for t in content.splitlines()], " ")
+        removed[old] = list(dict.fromkeys(names))
+        added[old] = []
+        deleted.add(old)
+    for h in hunks:
+        if cfg.is_excluded(h.file_path) or not is_test_file(h.file_path) or h.file_path in hidden.values():
+            continue
+        removed.setdefault(h.file_path, []).extend(_test_case_names(h.file_path, _side(h, "-"), "-"))
+        added.setdefault(h.file_path, []).extend(_test_case_names(h.file_path, _side(h, "+"), "+"))
+        first_hunk.setdefault(h.file_path, h.new_start)
+        if h.is_deleted_file:
+            deleted.add(h.file_path)
+        if h.is_new_file and _collected(h.file_path):
+            new_files.add(Path(h.file_path).name)
+    # Tests added to a file the runner never collects (`tests/helpers.py`) do not offset removed ones,
+    # except those moved within that same file.
+    for path, names in added.items():
+        if not _collected(path):
+            added[path] = list((Counter(names) & Counter(removed.get(path, []))).elements())
+
+    all_added = Counter(n for names in added.values() for n in names)
+    missing = Counter(n for names in removed.values() for n in names) - all_added
+    findings: list[Finding] = []
+    explained = 0
+    for path in sorted(deleted):
+        names = removed[path]
+        lost = sorted({n for n in names if missing[n]})
+        moved = not lost if names else Path(path).name in new_files
+        if moved:
+            continue
+        # Only the tests not added back elsewhere: a moved test is already offset by its addition.
+        for n in names:
+            if missing[n] > 0:
+                missing[n] -= 1
+                explained += 1
+        if cfg.is_exempt(path, "diff-test-file-deleted"):
+            continue
+        what = f"its tests ({', '.join(lost[:3])}{', ...' if len(lost) > 3 else ''}) are not added back anywhere" if lost else "no test file of the same name is added"
+        how = f" (renamed to '{hidden[path]}', which the test runner does not collect)" if path in hidden else ""
+        findings.append(
+            Finding(
+                path=path,
+                line=1,
+                rule="diff-test-file-deleted",
+                severity="P1",
+                text=f"deleted test file {path}",
+                message=(
+                    f"Test file '{path}' is deleted{how} and {what}. Restore it and fix the code it tests; if the "
+                    "removal is intended, record it with an `exempt` entry for this path and rule, with a reason."
+                ),
+            )
+        )
+
+    net = {p: len(removed[p]) - len(added[p]) for p in removed if p not in deleted}
+    exempt = {p for p in net if cfg.is_exempt(p, "diff-test-count-drop")}
+    # An exempt file's own drop is acknowledged; it must not hide another file's.
+    drop = sum(len(v) for v in removed.values()) - sum(all_added.values()) - explained - sum(max(0, net[p]) for p in exempt)
+    kept = [p for p in net if p not in exempt]
+    if drop > 0 and kept:
+        path = max(kept, key=lambda p: net[p])
+        lost = sorted({n for n in removed[path] if missing[n]})
+        findings.append(
+            Finding(
+                path=path,
+                line=first_hunk[path],
+                rule="diff-test-count-drop",
+                severity="P1",
+                text=f"{drop} fewer test case(s): {', '.join(lost[:3])}",
+                message=(
+                    f"The diff removes {drop} more test case(s) than it adds"
+                    f"{' (for example ' + ', '.join(lost[:3]) + ' in ' + repr(path) + ')' if lost else ''}. "
+                    "Restore the tests and fix the code; if the removal is intended, record it with an "
+                    "`exempt` entry for this path and rule, with a reason."
+                ),
+            )
+        )
+    return findings
+
+
 def scan_diff_for_reward_hacking(
     diff_text: str,
     repo_root: Path | str | None = None,
@@ -1417,7 +1613,8 @@ def scan_diff_for_reward_hacking(
     """Scan a unified git diff for EvilGenie `test-input-special-casing` and `diff-assertion-weakening`."""
     cfg = config or PrufGateConfig()
     hunks = _parse_diff_into_hunks(diff_text)
-    if not hunks:
+    renames = dict(re.findall(r"^rename from (.+)\nrename to (.+)$", diff_text, re.M))
+    if not hunks and not renames:
         return []
 
     findings: list[Finding] = []
@@ -1535,9 +1732,10 @@ def scan_diff_for_reward_hacking(
             if cfg.is_exempt(hunk.file_path, "test-input-special-casing"):
                 continue
 
+            hunk_lines = dict(hunk.added_lines + hunk.context_lines)
             for ln, raw in hunk.added_lines:
                 s = raw.strip()
-                if not s or s.startswith(("#", "//", "/*", "*")) or "prufgate-ignore" in s.lower():
+                if not s or s.startswith(("#", "//", "/*", "*")):
                     continue
                 # Must look like a conditional branch (if, elif, case, match arm =>, ternary ?)
                 is_branch = bool(
@@ -1556,7 +1754,10 @@ def scan_diff_for_reward_hacking(
                         rf"""(?:==|===|!=|!==|\bin\b|\bcase\b|=>)\s*["']?{escaped}["']?|["']{escaped}["']\s*(?:==|===|=>|:)""",
                         s,
                     )
-                    if branch_match:
+                    if branch_match and not inline_ignore.suppressed(
+                        inline_ignore.context([hunk_lines.get(ln - 1, ""), raw], 2), "test-input-special-casing", engine="test-integrity", path=hunk.file_path, line=ln,
+                        severity="P0", message=f"Production branch special-cases test literal '{lit}'",
+                    ):
                         findings.append(
                             Finding(
                                 path=hunk.file_path,
@@ -1572,6 +1773,7 @@ def scan_diff_for_reward_hacking(
                         )
                         break
 
+    findings.extend(_removed_test_findings(hunks, cfg, renames, Path(repo_root) if repo_root is not None else None))
     return findings
 
 
@@ -1747,6 +1949,27 @@ def test_reconcile_overdraft_raises():
         """
         it('validates session', () => {
             expect(true).toBe(true);
+        });
+        """,
+        {"tautological-assertion"},
+    ),
+    (
+        "ts-tautology-ignored-with-reason-negative",
+        "src/auth.test.ts",
+        """
+        it('validates session', () => {
+            // prufgate-ignore: tautological-assertion -- smoke test that the runner loads
+            expect(true).toBe(true);
+        });
+        """,
+        set(),
+    ),
+    (
+        "ts-tautology-ignored-without-reason-positive",
+        "src/auth.test.ts",
+        """
+        it('validates session', () => {
+            expect(true).toBe(true); // prufgate-ignore: tautological-assertion
         });
         """,
         {"tautological-assertion"},
@@ -2061,6 +2284,128 @@ diff --git a/src/tax.py b/src/tax.py
 """,
         set(),
     ),
+    # --- 8. diff-test-file-deleted ---
+    (
+        "diff-deleted-test-file-positive",
+        """diff --git a/tests/test_refunds.py b/tests/test_refunds.py
+deleted file mode 100644
+--- a/tests/test_refunds.py
++++ /dev/null
+@@ -1,4 +0,0 @@
+-def test_refund_rejects_closed_order():
+-    assert refund(closed_order()) is False
+-def test_refund_full_amount():
+-    assert refund(open_order()).amount == 40
+""",
+        {"diff-test-file-deleted"},
+    ),
+    (
+        "diff-test-file-moved-negative",
+        """diff --git a/tests/test_refunds.py b/tests/test_refunds.py
+deleted file mode 100644
+--- a/tests/test_refunds.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-def test_refund_rejects_closed_order():
+-    assert refund(closed_order()) is False
+diff --git a/tests/billing/test_refunds.py b/tests/billing/test_refunds.py
+new file mode 100644
+--- /dev/null
++++ b/tests/billing/test_refunds.py
+@@ -0,0 +1,2 @@
++def test_refund_rejects_closed_order():
++    assert refund(closed_order()) is False
+""",
+        set(),
+    ),
+    (
+        "diff-test-file-git-rename-negative",
+        """diff --git a/src/cart.test.ts b/src/cart/cart.test.ts
+similarity index 100%
+rename from src/cart.test.ts
+rename to src/cart/cart.test.ts
+""",
+        set(),
+    ),
+    (
+        "diff-test-file-renamed-to-non-test-positive",
+        """diff --git a/tests/test_refunds.py b/tests/refund_cases.py
+similarity index 100%
+rename from tests/test_refunds.py
+rename to tests/refund_cases.py
+""",
+        {"diff-test-file-deleted"},
+    ),
+    # --- 9. diff-test-count-drop ---
+    (
+        "diff-test-count-drop-positive",
+        """diff --git a/src/cart.test.ts b/src/cart.test.ts
+--- a/src/cart.test.ts
++++ b/src/cart.test.ts
+@@ -10,7 +10,3 @@
+ it('adds an item', () => {
+   expect(add(cart, item).items).toHaveLength(1);
+ });
+-it('rejects a negative quantity', () => {
+-  const bad = { ...item, qty: -1 };
+-  expect(() => add(cart, bad)).toThrow();
+-});
+""",
+        {"diff-test-count-drop"},
+    ),
+    (
+        "diff-go-test-count-drop-positive",
+        """diff --git a/pkg/ledger/ledger_test.go b/pkg/ledger/ledger_test.go
+--- a/pkg/ledger/ledger_test.go
++++ b/pkg/ledger/ledger_test.go
+@@ -20,4 +20,0 @@
+-func TestOverdraftRejected(t *testing.T) {
+-\tif _, err := Withdraw(acct, 500); err == nil {
+-\t\tt.Fatal("expected an error")
+-\t}
+""",
+        {"diff-test-count-drop"},
+    ),
+    (
+        "diff-test-readded-in-docstring-positive",
+        """diff --git a/tests/test_ledger.py b/tests/test_ledger.py
+--- a/tests/test_ledger.py
++++ b/tests/test_ledger.py
+@@ -5,2 +5,4 @@
+-def test_overdraft():
+-    check_overdraft()
++\"\"\"
++def test_overdraft():
++\"\"\"
++X = 1
+""",
+        {"diff-test-count-drop"},
+    ),
+    (
+        "diff-test-renamed-and-moved-negative",
+        """diff --git a/src/cart.test.ts b/src/cart.test.ts
+--- a/src/cart.test.ts
++++ b/src/cart.test.ts
+@@ -10,3 +10,3 @@
+-it('rejects a negative quantity', () => {
++it('rejects a quantity below zero', () => {
+   expect(() => add(cart, bad)).toThrow();
+ });
+@@ -20,3 +20,0 @@
+-test('totals two items', () => {
+-  expect(total(two)).toBe(9);
+-});
+diff --git a/src/total.test.ts b/src/total.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/total.test.ts
+@@ -0,0 +1,3 @@
++test('totals two items', () => {
++  expect(total(two)).toBe(9);
++});
+""",
+        set(),
+    ),
 ]
 
 
@@ -2096,48 +2441,6 @@ def run_self_check() -> int:
     return 0
 
 
-class GitDiffError(RuntimeError):
-    """git could not produce the diff: not a repository, an unknown ref, or a refused argument."""
-
-
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-
-def _git(args: list[str], cwd: Path | str | None) -> str:
-    try:
-        res = subprocess.run(
-            ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
-        )
-    except OSError as e:
-        raise GitDiffError(f"cannot run git: {e}") from e
-    if res.returncode != 0:
-        lines = [ln.strip() for ln in res.stderr.strip().splitlines() if ln.strip()]
-        reason = next((ln for ln in lines if ln.startswith(("fatal:", "error:"))), lines[0] if lines else "")
-        raise GitDiffError(reason or f"git {args[0]} failed")
-    return res.stdout
-
-
-def _diff_base(base_ref: str | None, cwd: Path | str | None) -> str:
-    """The commit the working tree is compared with: the merge base with
-    `base_ref` (committed and uncommitted PR changes alike), else HEAD, else the
-    empty tree in a repository with no commits yet."""
-    if base_ref is not None:
-        if not base_ref or base_ref.startswith("-"):
-            raise GitDiffError(f"refusing base ref {base_ref!r}")
-        candidates = [base_ref] if base_ref.startswith("origin/") else [base_ref, f"origin/{base_ref}"]
-        for ref in candidates:
-            try:
-                return _git(["merge-base", ref, "HEAD"], cwd).strip()
-            except GitDiffError:
-                continue
-        raise GitDiffError(f"unknown base ref {base_ref!r}")
-    _git(["rev-parse", "--is-inside-work-tree"], cwd)
-    try:
-        return _git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd).strip()
-    except GitDiffError:
-        return EMPTY_TREE
-
-
 def _untracked_files(cwd: Path | str | None) -> list[str]:
     out = _git(["ls-files", "-z", "--others", "--exclude-standard", "--full-name"], cwd)
     return [name for name in out.split("\0") if name]
@@ -2170,7 +2473,7 @@ def _get_git_diff(base_ref: str | None = None, cwd: Path | None = None, strict: 
         base = _diff_base(base_ref, cwd)
         # --text and no external diff or textconv: a committed .gitattributes must not
         # turn a change into "Binary files differ" and hide it.
-        diff = _git(["-c", "core.quotePath=false", "diff", "--text", "--no-ext-diff", "--no-textconv", "--end-of-options", base], cwd)
+        diff = _git(["-c", "core.quotePath=false", "diff", "-M", "--text", "--no-ext-diff", "--no-textconv", "--end-of-options", base], cwd)
         return diff + _untracked_as_diff(cwd)
     except GitDiffError:
         if strict:
@@ -2280,7 +2583,7 @@ def main(argv: list[str] | None = None) -> int:
             raw_roots.append(a)
 
     try:
-        cfg = PrufGateConfig.load(Path.cwd(), config_path)
+        cfg = PrufGateConfig.load(Path.cwd(), config_path, ref=base_ref)
     except ConfigError as e:
         print(f"test_integrity: {e}", file=sys.stderr)
         return 2
@@ -2345,6 +2648,7 @@ def main(argv: list[str] | None = None) -> int:
             seen.add(key)
             deduped.append(f)
 
+    deduped = visible(deduped, cfg.enable_low_confidence)
     debt_violations, debt_advisories = cfg.check_debt_ratchet(deduped)
 
     if json_out:

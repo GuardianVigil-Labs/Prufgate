@@ -33,7 +33,7 @@ def synth_core() -> set[str]:
     return set(CORE_ENGINES)
 
 
-FABRICATED_TS = "export const SAMPLE_USERS = [{ id: 1, name: 'Demo' }];\n"
+FABRICATED_TS = 'export function listUsers() {\n  throw new Error("TODO: list users");\n}\n'
 
 
 def git(ws: Path, *args: str) -> None:
@@ -116,7 +116,7 @@ class Synthesizer(unittest.TestCase):
 
     def test_clean_and_findings(self):
         self.assertEqual(self.synth(self.full(self.entry("anti-fabrication", 0)), {"anti_fabrication.json": "[]"}), 0)
-        finding = json.dumps([{"rule": "demo-named-data", "file": "a.ts", "line": 1}])
+        finding = json.dumps([{"rule": "unimplemented-production-stub", "file": "a.ts", "line": 1}])
         self.assertEqual(self.synth(self.full(self.entry("anti-fabrication", 1)), {"anti_fabrication.json": finding}), 1)
 
     def test_skipped_optional_tool_is_not_an_error(self):
@@ -250,7 +250,7 @@ class Cli(unittest.TestCase):
 
     def test_check_changed_from_another_directory(self):
         # BUG-04: git ran in the shell's directory, not the workspace.
-        (self.ws / "src" / "new.ts").write_text("export const FAKE_ITEMS = [1];\n")
+        (self.ws / "src" / "new.ts").write_text('export function listItems() {\n  throw new Error("TODO: list items");\n}\n')
         rc, out = self.run_cli("check", str(self.ws), "--changed", "--format", "json")
         self.assertEqual(rc, 1)
         files = {f["file"] for f in json.loads(out)}
@@ -282,23 +282,23 @@ class Cli(unittest.TestCase):
         # MED-01: `prufgate check` ignored known_debt ceilings.
         (self.ws / ".prufgate").mkdir()
         cfg = self.ws / ".prufgate" / "config.yaml"
-        cfg.write_text("known_debt:\n  demo-named-data: 5\n")
+        cfg.write_text("known_debt:\n  unimplemented-production-stub: 5\n")
         rc, out = self.run_cli("check", str(self.ws), "--format", "json")
-        self.assertNotIn("demo-named-data", {f["rule"] for f in json.loads(out)})
-        cfg.write_text("known_debt:\n  demo-named-data: 0\n")
+        self.assertNotIn("unimplemented-production-stub", {f["rule"] for f in json.loads(out)})
+        cfg.write_text("known_debt:\n  unimplemented-production-stub: 0\n")
         rc, out = self.run_cli("check", str(self.ws), "--format", "json")
         self.assertEqual(rc, 1)
         self.assertIn("debt-ceiling-breached", {f["rule"] for f in json.loads(out)})
 
     def test_stop_hook_active_does_not_block_twice(self):
         # MED-03: the Stop hook must honour stop_hook_active or the agent loops forever.
-        (self.ws / "src" / "new.ts").write_text("export const FAKE_ITEMS = [1];\n")
+        (self.ws / "src" / "new.ts").write_text('export function listItems() {\n  throw new Error("TODO: list items");\n}\n')
         base = [sys.executable, str(ROOT / "prufgate" / "cli.py"), "check", str(self.ws), "--changed", "--format", "agent-hook"]
         first = subprocess.run(base, input="{}", capture_output=True, text=True)
         again = subprocess.run(base, input=json.dumps({"stop_hook_active": True}), capture_output=True, text=True)
         self.assertEqual(first.returncode, 2)
         self.assertEqual(again.returncode, 0)
-        self.assertIn("FAKE_ITEMS", again.stderr)
+        self.assertIn("TODO: list items", again.stderr)
 
     def test_agent_hook_errors_block_unless_stop_hook_active(self):
         (self.ws / ".prufgate").mkdir()

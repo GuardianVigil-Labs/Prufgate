@@ -48,6 +48,9 @@ class DetectorTest(unittest.TestCase):
     def test_finding_is_reported(self):
         (self.repo / "src" / "feed.ts").write_text(FABRICATED)
         code, out = run(self.repo, "--json-out=r.json")
+        self.assertNotIn("demo-named-data", out)  # a low-confidence rule: off by default
+        self.settings({"enable_low_confidence": True})
+        code, out = run(self.repo, "--json-out=r.json")
         self.assertEqual(code, 1, out)
         rules = {f["rule"] for f in json.loads((self.repo / "r.json").read_text())}
         self.assertIn("demo-named-data", rules)
@@ -103,15 +106,25 @@ class DetectorTest(unittest.TestCase):
 
     def test_inline_prufgate_ignore_comment_suppression(self):
         (self.repo / "src" / "feed.ts").write_text(
-            "export const SAMPLE_FEED = [{ ip: '198.51.100.7' }]; // prufgate-ignore: demo-named-data, documentation-address\n"
+            "export const SAMPLE_FEED = [{ ip: '198.51.100.7' }]; "
+            "// prufgate-ignore: demo-named-data, documentation-address -- documented example feed\n"
         )
         code, out = run(self.repo)
         self.assertEqual(code, 0, out)
+
+    def test_inline_prufgate_ignore_without_reason_suppresses_nothing(self):
+        (self.repo / "src" / "feed.ts").write_text(
+            "export const SAMPLE_FEED = [{ ip: '198.51.100.7' }]; // prufgate-ignore: demo-named-data, documentation-address\n"
+        )
+        code, out = run(self.repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("demo-named-data", out)
 
     def test_js_and_jsx_files_are_scanned(self):
         (self.repo / "src" / "widget.jsx").write_text(
             "export const MOCK_ALERTS = [{ ip: '198.51.100.7' }];\n"
         )
+        self.settings({"enable_low_confidence": True})
         code, out = run(self.repo, "--json-out=r.json")
         self.assertEqual(code, 1, out)
         rules = {f["rule"] for f in json.loads((self.repo / "r.json").read_text())}

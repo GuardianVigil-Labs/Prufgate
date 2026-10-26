@@ -8,6 +8,13 @@ underlying defect:
      `test.skip`, `xit(`, `xdescribe(`, `test.only(`, `it.only(`, `@pytest.mark.skip`,
      `@pytest.mark.xfail`, `@unittest.skip`, `t.Skip(`, `#[ignore]`, or `@Disabled`
      without an issue reference comment (e.g., `#123` or `JIRA-456`).
+  1b. test-fake-exit (P0): Added lines in test files, conftest.py or test setup/config files
+     that end the run as a pass: `sys.exit(0)` (and aliases, `0x0`, `False`, `int()`),
+     `os._exit(0)`, `exit()`, `raise SystemExit`, `pytest.exit(..., 0)`, `process.exit(0)`,
+     Go `os.Exit(0)` / `syscall.Exit(0)`, or a module-level `raise SkipTest` / `pytest.skip(...)`.
+     Not flagged: `sys.exit(main())`, exits under `if __name__ == "__main__":`, exits a test
+     expects (inside `with pytest.raises(SystemExit):` or `expect(() => ...)`), and exits in
+     helpers of fixture scripts that no test, hook or fixture calls (see fake_exit.py).
   2. suppression-comment-smuggling (P1): Added lines introducing `@ts-ignore`,
      `@ts-expect-error` (without explanation), `eslint-disable`, `biome-ignore`,
      `# noqa`, `# type: ignore`, `// nolint`, `#[allow(`, `@SuppressWarnings`, or
@@ -24,9 +31,15 @@ underlying defect:
      exclusions, allowed paths, score owners or a narrower `languages` list, or dropping a pack.
      P0 when an exclusion covers every file or PrufGate's own configuration (`**`, `.prufgate/`).
      PrufGate's configuration files are always analysed, and a deleted one is flagged: the
-     configuration under review can neither exclude nor exempt itself.
+     configuration under review can neither exclude nor exempt itself. With a base ref,
+     every engine applies the configuration at the base, so the change's own edit is
+     reported and ignored until it is merged.
+  7. prufgate-config-not-applied (P2): with a base ref, the change edits or introduces the
+     PrufGate configuration; this run used the base configuration (or the defaults).
+  8. prufgate-config-base-invalid (P2): this version rejects the configuration at the
+     base, so the branch's (which must be valid) was applied; its diff lines are still checked.
 
-Untracked files count as added in full. Exit codes: 0 clean, 1 findings, 2 bad
+Untracked files count as added in full. Exit codes: 0 clean, 1 P0/P1 findings, 2 bad
 usage, an unreadable --diff-file or a git error (never a silent pass).
 
 CLI Usage:
@@ -41,11 +54,8 @@ CLI Usage:
 from __future__ import annotations
 
 import json
-import os
-import posixpath
 import re
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,7 +68,6 @@ from prufgate.anti_reward_hacking.test_integrity import (  # noqa: E402
     GitDiffError,
     _diff_base,
     _get_git_diff,
-    _git,
     is_internal_path,
     is_test_file,
 )
@@ -66,10 +75,13 @@ from prufgate.config import (  # noqa: E402
     DEFAULT_CONFIG_FILES,
     DEFAULT_PACKS,
     SUPPORTED_LANGUAGES,
+    BaseConfigInvalid,
+    BaseConfigNotAFile,
     ConfigError,
     PrufGateConfig,
     path_matches_pattern,
 )
+from prufgate.diff_guard import fake_exit  # noqa: E402
 
 
 @dataclass
@@ -177,6 +189,12 @@ SKIP_SMUGGLING_RE = re.compile(
     r"|@(?:Disabled|Ignore)\b"
 )
 
+# 1c. Fake exits: see fake_exit.py.
+JS_SUFFIXES = fake_exit.JS_SUFFIXES
+TEST_SETUP_RE = fake_exit.TEST_SETUP_RE
+_is_test_harness = fake_exit.is_test_harness
+
+
 # 2. Suppression comment smuggling patterns
 SUPPRESSION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ts-ignore", re.compile(r"//\s*@ts-ignore\b|/\*\s*@ts-ignore\b")),
@@ -283,79 +301,31 @@ def _is_own_config(rel_path: str) -> bool:
     return bool(PRUFGATE_CONFIG_RE.search(rel_path)) and "/" not in rel_path.replace("\\", "/").removeprefix(".prufgate/")
 
 
-def _config_finding(path: str, why: str, severity: str = "P1", text: str = "") -> Finding:
+NOT_APPLIED = " This run applied the base configuration and ignored the branch's: configuration changes take effect after merge."
+
+
+def _config_finding(path: str, why: str, severity: str = "P1", text: str = "", ignored: bool = False) -> Finding:
     return Finding(
         path=path,
         line=1,
         rule="prufgate-config-self-exemption",
         severity=severity,
         text=text or why,
-        message=f"PrufGate configuration in effect {why} compared with the base. A change that silences PrufGate needs a maintainer's review.",
+        message=f"PrufGate configuration in effect {why} compared with the base. A change that silences PrufGate needs a maintainer's review."
+        + (NOT_APPLIED if ignored else ""),
     )
 
 
-def _git_blob(commit: str, rel: str, root: Path, depth: int = 0) -> str | None:
-    """The text of `rel` (repository-relative) at `commit`, following an
-    in-repository symbolic link a few levels; None when it is not there."""
-    try:
-        entry = _git(["ls-tree", "-z", "--full-tree", commit, "--", rel], root).split("\0")[0]
-    except GitDiffError:
-        return None
-    if not entry:
-        return None
-    mode = entry.split(" ", 1)[0]
-    try:
-        blob = _git(["show", f"{commit}:{rel}"], root)
-    except GitDiffError:
-        return None
-    if mode != "120000":
-        return blob
-    target = posixpath.normpath(posixpath.join(posixpath.dirname(rel), blob.strip()))
-    if depth >= 5 or target.startswith("../") or target == ".." or posixpath.isabs(target):
-        return None
-    return _git_blob(commit, target, root, depth + 1)
-
-
-def _repo_prefix(root: Path) -> str:
-    """`root` relative to the repository top level ("" at the top), as git paths use it."""
-    try:
-        return _git(["rev-parse", "--show-prefix"], root).strip()
-    except GitDiffError:
-        return ""
-
-
-def _load_base_config(root: Path, base_commit: str, config_path: str | None) -> PrufGateConfig | None:
+def _load_base_config(root: Path, base_commit: str, config_path: str | None) -> PrufGateConfig:
     """The configuration that was in effect at `base_commit` (the defaults when
-    there was none), or None for a --config outside the repository."""
-    prefix = _repo_prefix(root)
-    explicit: str | None = None
-    rels = list(DEFAULT_CONFIG_FILES)
-    if config_path:
-        cp = Path(config_path)
-        if cp.is_absolute():
-            try:
-                cp = Path(os.path.relpath(cp, root))
-            except ValueError:
-                return None
-        rel = posixpath.normpath(cp.as_posix())
-        if rel.startswith("../") or rel == "..":
-            return None
-        explicit, rels = rel, [rel]
-    with tempfile.TemporaryDirectory() as tmp:
-        for rel in rels:
-            # Paths are taken as written, never resolved on disk: a link in the
-            # branch must not decide which base file is read.
-            blob = _git_blob(base_commit, posixpath.normpath(prefix + rel), root)
-            if blob is None:
-                continue
-            dest = Path(tmp) / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(blob, encoding="utf-8")
-        try:
-            return PrufGateConfig.load(tmp, explicit)
-        except ConfigError:
-            # No base config (or one this version cannot read): the defaults.
-            return PrufGateConfig()
+    there was none, or git could not read it). Raises BaseConfigInvalid when this
+    version rejects it."""
+    try:
+        return PrufGateConfig.load_at_commit(root, config_path, base_commit)
+    except BaseConfigInvalid:
+        raise
+    except ConfigError:
+        return PrufGateConfig()
 
 
 def _applied_packs(cfg: PrufGateConfig) -> set[str]:
@@ -363,6 +333,20 @@ def _applied_packs(cfg: PrufGateConfig) -> set[str]:
     packs that name a default pack replace the defaults, others add to them."""
     explicit = set(cfg.packs) if cfg.packs_explicit else set()
     return explicit if explicit & set(DEFAULT_PACKS) else set(DEFAULT_PACKS) | explicit
+
+
+def _head_config_path(head: PrufGateConfig, root: Path, base: PrufGateConfig | None = None) -> str:
+    """The repository path to name in a configuration finding."""
+    if head.source_path is not None:
+        try:
+            return Path(head.source_path).resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return Path(head.source_path).name
+    if base is not None and base.source_path is not None:
+        # Deleted or moved away: name the base file.
+        base_src = Path(base.source_path).as_posix()
+        return next((rel for rel in DEFAULT_CONFIG_FILES if base_src.endswith("/" + rel)), Path(base_src).name)
+    return DEFAULT_CONFIG_FILES[0]
 
 
 def config_drift_findings(
@@ -373,53 +357,101 @@ def config_drift_findings(
 ) -> list[Finding] | None:
     """Compare the configuration in effect on the branch with the one in effect
     at the base, by value: whatever the YAML spelling, file location, shadowing
-    or diff attributes. Returns None when there is no base to compare with."""
+    or diff attributes. Returns None when there is no base to compare with.
+
+    With `base_ref` the engines applied the base configuration, so the findings
+    say the branch's was ignored, and a branch that changes or introduces one
+    gets a `prufgate-config-not-applied` notice."""
     try:
         base_commit = _diff_base(base_ref, root)
     except GitDiffError:
         return None
     base = _load_base_config(root, base_commit, config_path)
-    if base is None:
-        return None
-    path = DEFAULT_CONFIG_FILES[0]
-    if head.source_path is not None:
-        try:
-            path = Path(head.source_path).resolve().relative_to(root.resolve()).as_posix()
-        except ValueError:
-            path = Path(head.source_path).name
-    elif base.source_path is not None:
-        # Deleted or moved away: name the base file (loaded from a temporary copy).
-        base_src = Path(base.source_path).as_posix()
-        path = next((rel for rel in DEFAULT_CONFIG_FILES if base_src.endswith("/" + rel)), Path(base_src).name)
+    return _compare_configs(head, base, _head_config_path(head, root, base), ignored=base_ref is not None)
+
+
+def _compare_configs(head: PrufGateConfig, base: PrufGateConfig, path: str, ignored: bool) -> list[Finding]:
+    """Every way `head` is looser than `base`, compared by value."""
     out: list[Finding] = []
+    if ignored and not head.same_settings(base):
+        what = "changes" if base.source_path is not None else "introduces"
+        out.append(
+            Finding(
+                path=path,
+                line=1,
+                rule="prufgate-config-not-applied",
+                severity="P2",
+                text=path,
+                message=f"This change {what} the PrufGate configuration. This run applied "
+                + ("the base configuration" if base.source_path is not None else "the defaults (the base has no configuration)")
+                + " and ignored the branch's: configuration changes take effect after merge.",
+            )
+        )
+
+    def finding(why: str, severity: str = "P1", text: str = "") -> None:
+        out.append(_config_finding(path, why, severity, text, ignored))
+
     for pat in head.exclude:
         if pat not in base.exclude:
             if _disables_prufgate(pat):
-                out.append(_config_finding(path, f"excludes every file or its own configuration (`{pat}`)", "P0", pat))
+                finding(f"excludes every file or its own configuration (`{pat}`)", "P0", pat)
             else:
-                out.append(_config_finding(path, f"excludes `{pat}`", text=pat))
+                finding(f"excludes `{pat}`", text=pat)
     for (ex_path, ex_rule) in head.exempt:
         if (ex_path, ex_rule) not in base.exempt:
-            out.append(_config_finding(path, f"exempts `{ex_rule}` in `{ex_path}`"))
+            finding(f"exempts `{ex_rule}` in `{ex_path}`")
     for key in head.known_debt:
         if key not in base.known_debt:
-            out.append(_config_finding(path, f"adds known debt `{key[1]}` in `{key[0]}`"))
+            finding(f"adds known debt `{key[1]}` in `{key[0]}`")
     for rule, ceiling in head.known_debt_ceilings.items():
         if ceiling > base.known_debt_ceilings.get(rule, 0):
-            out.append(_config_finding(path, f"allows {ceiling} `{rule}` finding(s) as debt"))
+            finding(f"allows {ceiling} `{rule}` finding(s) as debt")
     dropped = _applied_packs(base) - _applied_packs(head)
     if dropped:
-        out.append(_config_finding(path, f"drops pack(s) {', '.join(sorted(dropped))}"))
+        finding(f"drops pack(s) {', '.join(sorted(dropped))}")
     if head.languages:
         before = set(base.languages) or set(SUPPORTED_LANGUAGES)
         narrowed = before - set(head.languages)
         if narrowed:
-            out.append(_config_finding(path, f"stops scanning {', '.join(sorted(narrowed))}"))
+            finding(f"stops scanning {', '.join(sorted(narrowed))}")
+    if base.enable_low_confidence and not head.enable_low_confidence:
+        finding("turns low-confidence rules off (`enable_low_confidence`)")
     for name in ("auth_guards", "tenant_keys", "score_owners", "evidence_markers"):
         added = [v for v in getattr(head, name) if v not in getattr(base, name)]
         if added:
-            out.append(_config_finding(path, f"widens `{name}` with {', '.join(added)}"))
+            finding(f"widens `{name}` with {', '.join(added)}")
+    if base.registry_check and not head.registry_check:
+        finding("turns the registry check off")
+    elif head.registry_check:
+        if head.registry_offline_ok and not base.registry_offline_ok:
+            finding("lets the registry check pass when a lookup fails (`offline_ok`)")
+        if base.registry_check and head.registry_max_age_days < base.registry_max_age_days:
+            finding(f"lowers `registry_check.max_age_days` to {head.registry_max_age_days}")
+        if base.registry_check and head.registry_max_lookups < base.registry_max_lookups:
+            finding(f"lowers `registry_check.max_lookups` to {head.registry_max_lookups}")
+    removed = [v for v in base.model_call_patterns if v not in head.model_call_patterns]
+    if removed:
+        finding(f"removes `model_call_patterns` {', '.join(removed)}")
     return out
+
+
+def _config_not_a_file(root: Path, config_path: str | None) -> list[Finding]:
+    """A configuration path that is a directory in the working tree: the loader
+    skips it, so it hides the file a reviewer expects to find there."""
+    rels = [config_path] if config_path else list(DEFAULT_CONFIG_FILES)
+    return [
+        Finding(
+            path=rel,
+            line=1,
+            rule="prufgate-config-self-exemption",
+            severity="P1",
+            text=rel,
+            message=f"PrufGate configuration path '{rel}' is a directory, not a file, so no configuration is read "
+            "from it. A change that silences PrufGate needs a maintainer's review.",
+        )
+        for rel in rels
+        if (root / rel).is_dir()
+    ]
 
 
 def with_config_drift(
@@ -431,11 +463,28 @@ def with_config_drift(
 ) -> list[Finding]:
     """Replace the line-based findings on the root configuration with the
     by-value comparison, when a base is available."""
-    drift = config_drift_findings(head, root, base_ref, config_path)
+    not_a_file = _config_not_a_file(root, config_path)
+    try:
+        drift = config_drift_findings(head, root, base_ref, config_path)
+    except BaseConfigInvalid as e:
+        # The engines applied the branch's configuration. A base made invalid on
+        # purpose must not open the door to a looser one: compare with the defaults.
+        path = _head_config_path(head, root)
+        drift = _compare_configs(head, PrufGateConfig(), path, ignored=False) + [
+            Finding(
+                path=path,
+                line=1,
+                rule="prufgate-config-base-invalid",
+                severity="P1" if isinstance(e, BaseConfigNotAFile) else "P2",
+                text=str(e),
+                message=f"The PrufGate configuration at the base is invalid under this version ({e}); "
+                "this run applied the branch's configuration instead and compared it with the defaults.",
+            )
+        ]
     if drift is None:
-        return findings
+        return findings + not_a_file
     kept = [f for f in findings if not (f.rule == "prufgate-config-self-exemption" and _is_own_config(f.path))]
-    return kept + drift
+    return kept + drift + not_a_file
 
 
 def _disables_prufgate(pattern: str) -> bool:
@@ -687,6 +736,11 @@ def scan_diff_for_tampering(
                 )
             )
 
+    file_lines: dict[str, list[str]] = {}
+    for h in hunks:
+        file_lines.setdefault(h.file_path, []).extend(t for _, t in h.context_lines + h.added_lines)
+    aliases: dict[str, dict[str, str]] = {}
+
     for hunk in hunks:
         rel_path = hunk.file_path.replace("\\", "/")
         # PrufGate's own configuration is always analysed: the configuration under
@@ -698,11 +752,18 @@ def scan_diff_for_tampering(
             continue
 
         is_test = is_test_file(rel_path)
+        is_harness = _is_test_harness(rel_path)
         is_linter_cfg = _is_linter_config_file(rel_path)
         is_ci_cfg = _is_ci_workflow_file(rel_path)
         sfx = Path(rel_path).suffix.lower()
         if sfx in (".md", ".mdx", ".rst", ".txt") and not is_linter_cfg and not is_ci_cfg:
             continue
+
+        exits: dict[int, str] = {}
+        if is_harness:
+            if sfx == ".py" and hunk.file_path not in aliases:
+                aliases[hunk.file_path] = fake_exit.python_aliases(file_lines[hunk.file_path])
+            exits = fake_exit.fake_exits(hunk, rel_path, aliases.get(hunk.file_path, {}))
 
         for idx, (ln, raw) in enumerate(hunk.added_lines):
             s = raw.strip()
@@ -710,8 +771,25 @@ def scan_diff_for_tampering(
                 continue
             prev_raw = hunk.added_lines[idx - 1][1] if idx > 0 else ""
 
-            # 1. Test Skip / Focus Smuggling
-            if FOCUS_LEAK_RE.search(s):
+            # 1. Fake exits, then skip / focus smuggling
+            why_exit = exits.get(ln)
+            has_issue = bool(ISSUE_REF_RE.search(s) or ISSUE_REF_RE.search(prev_raw))
+            if why_exit and not (has_issue and why_exit == fake_exit.SKIP_REASON):
+                if not cfg.is_exempt(rel_path, "test-fake-exit"):
+                    findings.append(
+                        Finding(
+                            path=rel_path,
+                            line=ln,
+                            rule="test-fake-exit",
+                            severity="P0",
+                            text=s,
+                            message=(
+                                f"Added in test code at '{rel_path}:{ln}': {why_exit}. "
+                                "Remove it and fix the failing tests instead."
+                            ),
+                        )
+                    )
+            elif FOCUS_LEAK_RE.search(s):
                 if not cfg.is_exempt(rel_path, "test-skip-smuggling"):
                     findings.append(
                         Finding(
@@ -725,7 +803,6 @@ def scan_diff_for_tampering(
                     )
             elif SKIP_SMUGGLING_RE.search(s):
                 # Allow if accompanied by an issue reference (#123, JIRA-123) or if t.Skip is inside testing.Short()
-                has_issue = bool(ISSUE_REF_RE.search(s) or ISSUE_REF_RE.search(prev_raw))
                 is_env_guard = bool(
                     re.search(r"\b(?:testing\.Short\(\)|os\.Getenv\b|sys\.platform\b|os\.environ\.get\b)", prev_raw + " " + s)
                 )
@@ -831,6 +908,135 @@ def scan_diff_for_tampering(
 # ---------------------------------------------------------------------------
 
 SELF_CHECK_CASES: list[tuple[str, str, set[str]]] = [
+    # --- 1c. test-fake-exit ---
+    (
+        "py-conftest-sys-exit-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,2 +1,4 @@
+ import sys
++
++sys.exit(0)
+""",
+        {"test-fake-exit"},
+    ),
+    (
+        "py-module-level-skiptest-positive",
+        """diff --git a/tests/test_billing.py b/tests/test_billing.py
+--- a/tests/test_billing.py
++++ b/tests/test_billing.py
+@@ -1,2 +1,3 @@
+ import unittest
++raise unittest.SkipTest("flaky")
+""",
+        {"test-fake-exit"},
+    ),
+    (
+        "js-jest-setup-process-exit-positive",
+        """diff --git a/jest.setup.js b/jest.setup.js
+--- a/jest.setup.js
++++ b/jest.setup.js
+@@ -1,1 +1,2 @@
+ require('dotenv').config();
++process.exit(0);
+""",
+        {"test-fake-exit"},
+    ),
+    (
+        "go-testmain-os-exit-zero-positive",
+        """diff --git a/pkg/ledger/main_test.go b/pkg/ledger/main_test.go
+--- a/pkg/ledger/main_test.go
++++ b/pkg/ledger/main_test.go
+@@ -3,3 +3,3 @@
+ func TestMain(m *testing.M) {
+-	os.Exit(m.Run())
++	os.Exit(0)
+ }
+""",
+        {"test-fake-exit"},
+    ),
+    (
+        "go-testmain-os-exit-run-negative",
+        """diff --git a/pkg/ledger/main_test.go b/pkg/ledger/main_test.go
+--- a/pkg/ledger/main_test.go
++++ b/pkg/ledger/main_test.go
+@@ -3,2 +3,3 @@
+ func TestMain(m *testing.M) {
++	os.Exit(m.Run())
+ }
+""",
+        set(),
+    ),
+    (
+        "py-cli-test-expects-system-exit-negative",
+        """diff --git a/tests/test_cli.py b/tests/test_cli.py
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -4,2 +4,6 @@
+ def test_version_exits_cleanly():
++    with pytest.raises(SystemExit) as exc:
++        sys.exit(0)
++    with self.assertRaises(SystemExit):
++        raise SystemExit
+     assert exc.value.code == 0
+""",
+        set(),
+    ),
+    (
+        "py-main-guard-and-exit-main-negative",
+        """diff --git a/tests/fixtures/stub_server.py b/tests/fixtures/stub_server.py
+--- a/tests/fixtures/stub_server.py
++++ b/tests/fixtures/stub_server.py
+@@ -8,2 +8,6 @@
+ def main():
+     return serve()
++
++if __name__ == "__main__":
++    sys.exit(0)
++result = sys.exit(main())
+""",
+        set(),
+    ),
+    (
+        "py-non-test-script-exit-negative",
+        """diff --git a/scripts/migrate.py b/scripts/migrate.py
+--- a/scripts/migrate.py
++++ b/scripts/migrate.py
+@@ -8,1 +8,2 @@
+ run()
++sys.exit(0)
+""",
+        set(),
+    ),
+    (
+        "py-conftest-exit-behind-comment-positive",
+        """diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,1 +1,2 @@
+ import sys
++sys.exit(0)  # expect(
+""",
+        {"test-fake-exit"},
+    ),
+    (
+        "py-fixture-script-helper-exit-negative",
+        """diff --git a/tests/fixtures/fake_cli.py b/tests/fixtures/fake_cli.py
+new file mode 100644
+--- /dev/null
++++ b/tests/fixtures/fake_cli.py
+@@ -0,0 +1,7 @@
++import sys
++def main():
++    print("ok")
++    sys.exit(0)
++
++if __name__ == "__main__":
++    main()
+""",
+        set(),
+    ),
     # --- 1. test-skip-smuggling (Positive & Negative across languages) ---
     (
         "ts-it-skip-unjustified-positive",
@@ -1322,7 +1528,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     try:
-        cfg = PrufGateConfig.load(Path.cwd(), config_path)
+        # The branch's configuration is compared with the base; the base's is applied.
+        head_cfg = PrufGateConfig.load(Path.cwd(), config_path)
+        cfg = PrufGateConfig.load(Path.cwd(), config_path, ref=base_ref) if base_ref else head_cfg
     except ConfigError as e:
         print(f"tamper_detector: {e}", file=sys.stderr)
         return 2
@@ -1342,7 +1550,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings = scan_diff_for_tampering(diff_text, config=cfg) if diff_text else []
     if not diff_file:
-        findings = with_config_drift(findings, cfg, Path.cwd(), base_ref, config_path)
+        findings = with_config_drift(findings, head_cfg, Path.cwd(), base_ref, config_path)
     if not include_self:
         findings = [f for f in findings if not is_internal_path(f.path)]
 
@@ -1365,7 +1573,8 @@ def main(argv: list[str] | None = None) -> int:
     for v in debt_violations:
         print(f"error: {v}", file=sys.stderr)
 
-    return 1
+    # Exit 1 only for blockers: a P2 notice is reported, never a failure.
+    return 1 if debt_violations or any(f.severity in ("P0", "P1") for f in findings) else 0
 
 
 if __name__ == "__main__":

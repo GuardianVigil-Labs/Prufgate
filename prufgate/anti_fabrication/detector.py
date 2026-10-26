@@ -37,6 +37,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR.parent.parent) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR.parent.parent))
 
+from prufgate import inline_ignore  # noqa: E402
 from prufgate.anti_fabrication.packs import cti  # noqa: E402
 from prufgate.config import (  # noqa: E402
     DEFAULT_PACKS,
@@ -45,6 +46,7 @@ from prufgate.config import (  # noqa: E402
     expand_rule_aliases,
     rules_match,
 )
+from prufgate.rules import visible  # noqa: E402
 
 # Multi-language file extension mapping
 LANGUAGE_BY_SUFFIX: dict[str, str] = {
@@ -488,33 +490,6 @@ def scan_file(path: Path, root: Path | None = None) -> list[Finding]:
     return scan_text(workspace_relative(path, root), path.suffix, text)
 
 
-INLINE_IGNORE_RE = re.compile(
-    r"prufgate-ignore(?:\s*:\s*([a-zA-Z0-9_,\s-]+?))?(?:\s+-|\s+--|\s+\*/|$)",
-    re.IGNORECASE,
-)
-
-
-def _is_inline_ignored(lines: list[str], line_num: int, rule: str) -> bool:
-    """Check if `line_num` (1-indexed) or the preceding comment line has `prufgate-ignore`."""
-    if line_num <= 0 or line_num > len(lines):
-        return False
-    candidates = [lines[line_num - 1]]
-    if line_num >= 2:
-        prev = lines[line_num - 2].strip()
-        if prev.startswith(("//", "#", "/*", "*")):
-            candidates.append(prev)
-    for text_line in candidates:
-        m = INLINE_IGNORE_RE.search(text_line)
-        if m:
-            spec = (m.group(1) or "").strip()
-            if not spec or spec.lower() == "all":
-                return True
-            ignored_rules = {tok.strip() for tok in re.split(r"[,\s]+", spec) if tok.strip()}
-            if "all" in ignored_rules or any(rules_match(rule, ig) for ig in ignored_rules):
-                return True
-    return False
-
-
 def _is_exempt_or_debt(rel: str, rule: str, table: dict[tuple[str, str], str]) -> bool:
     if (rel, rule) in table:
         return True
@@ -532,7 +507,10 @@ def scan_text(rel: str, suffix: str, text: str) -> list[Finding]:
         for f in raw_findings(rel, suffix, text)
         if not _is_exempt_or_debt(rel, f.rule, V2_EXEMPT)
         and not _is_exempt_or_debt(rel, f.rule, KNOWN_DEBT)
-        and not _is_inline_ignored(lines, f.line, f.rule)
+        and not inline_ignore.suppressed_at(
+            lines, f.line, f.rule, engine="anti-fabrication", path=rel, severity="P0",
+            message=f"Fabrication pattern '{f.rule}': {f.text}",
+        )
     ]
 
 
@@ -898,6 +876,10 @@ sku-1001 widget`;
      '  <button onClick={() => {}}>Save</button>', "stub-click-handler"),
     ("a stub click handler suppressed with prufgate-ignore", "src/components/Button.tsx",
      '  // prufgate-ignore: stub-click-handler - intentional placeholder\n  <button onClick={() => {}}>Save</button>', None),
+    ("a prufgate-ignore without a reason suppresses nothing", "src/components/Button.tsx",
+     '  <button onClick={() => {}}>Save</button> {/* prufgate-ignore: stub-click-handler */}', "stub-click-handler"),
+    ("a reasoned prufgate-ignore naming another rule suppresses nothing", "src/components/Button.tsx",
+     '  <button onClick={() => {}}>Save</button> {/* prufgate-ignore: synthetic-delay -- demo only */}', "stub-click-handler"),
     ("a valid click handler with logic", "src/components/Button.tsx",
      '  <button onClick={() => handleClick(id)}>Save</button>', None),
     ("synthetic delay mock returning hardcoded data", "src/services/api.ts", """
@@ -1143,9 +1125,10 @@ class ScanError(RuntimeError):
     """A file selected for scanning could not be read."""
 
 
-def load_settings(path: str | None) -> dict:
-    """Read and validate a settings file (.prufgate/config.yaml or .prufgate/fabrication.json)."""
-    cfg = PrufGateConfig.load(".", explicit_path=path)
+def load_settings(path: str | None, ref: str | None = None) -> dict:
+    """Read and validate a settings file (.prufgate/config.yaml or .prufgate/fabrication.json),
+    as it is at the base ref `ref` when one is given."""
+    cfg = PrufGateConfig.load(".", explicit_path=path, ref=ref)
     if cfg.source_path is None and path is None:
         return {}
     return cfg.to_detector_settings()
@@ -1272,8 +1255,10 @@ def main() -> int:
             clean_args.append(a)
     args = clean_args
 
+    changed_arg = next((a for a in args if a.startswith("--changed")), None)
+    base = changed_arg.split("=", 1)[1] if changed_arg and "=" in changed_arg else None
     try:
-        loaded = load_settings(config_path)
+        loaded = load_settings(config_path, base)
         if cli_packs:
             loaded["packs"] = list(set(loaded.get("packs", [])) | set(cli_packs))
         apply_settings(loaded)
@@ -1281,9 +1266,7 @@ def main() -> int:
         print(f"fabrication settings: {e}", file=sys.stderr)
         return 2
 
-    changed_arg = next((a for a in args if a.startswith("--changed")), None)
     if changed_arg:
-        base = changed_arg.split("=", 1)[1] if "=" in changed_arg else None
         try:
             targets = [f for f in changed_files(base) if Path(f).exists()]
         except GitError as e:
@@ -1339,6 +1322,10 @@ def main() -> int:
             for (path, rule), reason in KNOWN_DEBT.items():
                 print(f"  {path} [{rule}] {reason}")
             print()
+
+    # Low-confidence rules are off unless the config turns them on: they neither
+    # report nor count toward a debt ceiling.
+    findings = visible(findings, bool(loaded.get("enable_low_confidence")))
 
     if KNOWN_DEBT_CEILINGS:
         cfg_obj = PrufGateConfig(known_debt_ceilings=KNOWN_DEBT_CEILINGS)

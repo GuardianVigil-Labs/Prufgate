@@ -1,0 +1,24 @@
+# Hooks for https://pre-commit.com. Both exit 0 clean, 1 on P0/P1 findings and
+# 2 when PrufGate cannot run, so a crash blocks the commit or push.
+- id: prufgate
+  name: PrufGate (changed files)
+  description: Engines 1-5 on what is being committed.
+  # pre-commit stashes unstaged edits first, so the working-tree diff against
+  # HEAD that `--changed` scans is the staged change (plus untracked files).
+  entry: prufgate check --changed
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+  stages: [pre-commit]
+  minimum_pre_commit_version: "3.2.0"
+- id: prufgate-full
+  name: PrufGate (whole repository)
+  description: Engines 1-5 on the whole repository, before a push.
+  entry: prufgate check
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+  stages: [pre-push]
+  minimum_pre_commit_version: "3.2.0"

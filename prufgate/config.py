@@ -2,14 +2,22 @@
 
 Supports `.prufgate/config.yaml`, `.prufgate/config.yml`, `.prufgate.yaml`, `.prufgate.yml`,
 and legacy `.prufgate/fabrication.json` / `.prufgate/debt-ceiling.json` files.
+
+With a base ref the configuration is read from that ref (`git show`), never from
+the working tree: a change cannot switch off the checks that review it. Its
+configuration edits take effect once it is merged.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import json
+import os
+import posixpath
 import re
-from dataclasses import dataclass, field
+import subprocess
+import tempfile
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +64,10 @@ CONFIG_KEYS = {
     "known_debt",
     "model_call_patterns",
     "evidence_markers",
+    "registry_check",
+    "enable_low_confidence",
 }
+REGISTRY_CHECK_KEYS = {"offline_ok", "max_age_days", "max_lookups"}
 
 DEBT_REF_RE = re.compile(r"^#\d+:\s*\S")
 
@@ -122,12 +133,121 @@ class ConfigError(ValueError):
     """Raised when a PrufGate configuration file is missing, malformed, or invalid."""
 
 
+class BaseConfigInvalid(ConfigError):
+    """The configuration at the base ref was read but this version rejects it."""
+
+
+class BaseConfigNotAFile(BaseConfigInvalid):
+    """A configuration path at the base ref is a directory or a submodule, not a file."""
+
+
+class GitDiffError(RuntimeError):
+    """git could not produce the diff: not a repository, an unknown ref, or a refused argument."""
+
+
+class NotAFileError(GitDiffError):
+    """The path exists at the commit but is a directory or a submodule, not a file."""
+
+
+# Regular files, executables and symbolic links: the only entries git_blob reads.
+BLOB_MODES = ("100644", "100755", "120000")
+
+
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _git(args: list[str], cwd: Path | str | None) -> str:
+    try:
+        res = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+    except OSError as e:
+        raise GitDiffError(f"cannot run git: {e}") from e
+    if res.returncode != 0:
+        lines = [ln.strip() for ln in res.stderr.strip().splitlines() if ln.strip()]
+        reason = next((ln for ln in lines if ln.startswith(("fatal:", "error:"))), lines[0] if lines else "")
+        raise GitDiffError(reason or f"git {args[0]} failed")
+    return res.stdout
+
+
+def _diff_base(base_ref: str | None, cwd: Path | str | None) -> str:
+    """The commit the working tree is compared with: the merge base with
+    `base_ref` (committed and uncommitted PR changes alike), else HEAD, else the
+    empty tree in a repository with no commits yet."""
+    if base_ref is not None:
+        if not base_ref or base_ref.startswith("-"):
+            raise GitDiffError(f"refusing base ref {base_ref!r}")
+        candidates = [base_ref] if base_ref.startswith("origin/") else [base_ref, f"origin/{base_ref}"]
+        for ref in candidates:
+            try:
+                return _git(["merge-base", ref, "HEAD"], cwd).strip()
+            except GitDiffError:
+                continue
+        raise GitDiffError(f"unknown base ref {base_ref!r}")
+    _git(["rev-parse", "--is-inside-work-tree"], cwd)
+    try:
+        return _git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd).strip()
+    except GitDiffError:
+        return EMPTY_TREE
+
+
+def git_blob(commit: str, rel: str, root: Path, depth: int = 0) -> str | None:
+    """The text of `rel` (repository-relative) at `commit`, following an
+    in-repository symbolic link a few levels; None when it is not there.
+    Only files and links are read: a directory or a submodule raises
+    NotAFileError (`git show` of a tree prints its listing, never a file).
+    Raises GitDiffError when git cannot read `commit` at all."""
+    entry = _git(["ls-tree", "-z", "--full-tree", commit, "--", rel], root).split("\0")[0]
+    if not entry:
+        return None
+    mode = entry.split(" ", 1)[0]
+    if mode not in BLOB_MODES:
+        raise NotAFileError(f"{rel} is not a file at {commit[:12]}")
+    blob = _git(["show", f"{commit}:{rel}"], root)
+    if mode != "120000":
+        return blob
+    target = posixpath.normpath(posixpath.join(posixpath.dirname(rel), blob.strip()))
+    if depth >= 5 or target.startswith("../") or target == ".." or posixpath.isabs(target):
+        return None
+    return git_blob(commit, target, root, depth + 1)
+
+
+def repo_prefix(root: Path) -> str:
+    """`root` relative to the repository top level ("" at the top), as git paths use it."""
+    try:
+        return _git(["rev-parse", "--show-prefix"], root).strip()
+    except GitDiffError:
+        return ""
+
+
 def _parse_str_list(raw: Any, key: str) -> list[str]:
     if raw is None:
         return []
     if not isinstance(raw, list) or not all(isinstance(x, str) and x.strip() for x in raw):
         raise ConfigError(f"{key} must be a list of non-empty strings")
     return [x.strip() for x in raw]
+
+
+def _parse_registry_check(raw: Any) -> tuple[bool, bool, int, int]:
+    """`registry_check`: true/false, or a mapping of settings (which turns it on).
+    Returns (enabled, offline_ok, max_age_days, max_lookups)."""
+    if raw is None or isinstance(raw, bool):
+        return bool(raw), False, 30, 50
+    if not isinstance(raw, dict):
+        raise ConfigError("registry_check must be true, false or a mapping")
+    unknown = set(raw) - REGISTRY_CHECK_KEYS
+    if unknown:
+        raise ConfigError(f"registry_check: unknown key(s): {', '.join(sorted(map(str, unknown)))}")
+    offline_ok = raw.get("offline_ok", False)
+    if not isinstance(offline_ok, bool):
+        raise ConfigError("registry_check.offline_ok must be true or false")
+    numbers = []
+    for key, default in (("max_age_days", 30), ("max_lookups", 50)):
+        value = raw.get(key, default)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ConfigError(f"registry_check.{key} must be a non-negative integer")
+        numbers.append(value)
+    return True, offline_ok, numbers[0], numbers[1]
 
 
 def _parse_exempt(raw: Any) -> dict[tuple[str, str], str]:
@@ -229,6 +349,11 @@ class PrufGateConfig:
     known_debt_ceilings: dict[str, int] = field(default_factory=dict)
     model_call_patterns: list[str] = field(default_factory=list)
     evidence_markers: list[str] = field(default_factory=list)
+    registry_check: bool = False
+    registry_offline_ok: bool = False
+    registry_max_age_days: int = 30
+    registry_max_lookups: int = 50
+    enable_low_confidence: bool = False
     source_path: Path | None = None
 
     def is_excluded(self, rel_path: str) -> bool:
@@ -257,6 +382,7 @@ class PrufGateConfig:
             "tenant_keys": list(self.tenant_keys),
             "model_call_patterns": list(self.model_call_patterns),
             "evidence_markers": list(self.evidence_markers),
+            "enable_low_confidence": self.enable_low_confidence,
         }
 
     def check_debt_ratchet(self, findings: list[Any]) -> tuple[list[str], list[str]]:
@@ -297,9 +423,31 @@ class PrufGateConfig:
         cls,
         repo_root: Path | str = ".",
         explicit_path: str | Path | None = None,
+        ref: str | None = None,
     ) -> PrufGateConfig:
-        """Discover, parse, and validate `.prufgate/config.yaml` (or legacy JSON fallback)."""
+        """Discover, parse, and validate `.prufgate/config.yaml` (or legacy JSON fallback).
+
+        With `ref` (the base ref a changed-files scan diffs against) the files are
+        read as they are at the merge base with that ref, never from the working
+        tree; the defaults apply when the base has none, and the working-tree
+        file when this version rejects the base's. A ref git cannot read raises
+        ConfigError, so the run fails closed."""
         root = Path(repo_root)
+        if ref is not None:
+            try:
+                commit = _diff_base(ref, root)
+            except GitDiffError as e:
+                raise ConfigError(
+                    f"cannot read the PrufGate configuration at base ref {ref!r}: {e} (shallow clone? fetch it first)"
+                ) from e
+            try:
+                return cls.load_at_commit(root, explicit_path, commit)
+            except BaseConfigInvalid:
+                # Already merged, so not the change's doing: a PrufGate upgrade that
+                # rejects an old key must not block the change that fixes it. The
+                # branch's configuration applies (it must be valid); the diff guard
+                # reports `prufgate-config-base-invalid`.
+                return cls.load(root, explicit_path)
         if explicit_path is not None:
             p = Path(explicit_path)
             if not p.is_absolute() and not p.is_file():
@@ -310,7 +458,7 @@ class PrufGateConfig:
                 raise ConfigError(f"settings file not found: {explicit_path}")
         else:
             found = next((root / rel for rel in DEFAULT_CONFIG_FILES if (root / rel).is_file()), None)
-            if found is None:
+            if not found:
                 return cls()
             p = found
 
@@ -362,7 +510,16 @@ class PrufGateConfig:
         model_call_patterns = _parse_str_list(raw.get("model_call_patterns"), "model_call_patterns")
         evidence_markers = _parse_str_list(raw.get("evidence_markers"), "evidence_markers")
 
+        enable_low_confidence = raw.get("enable_low_confidence", False)
+        if not isinstance(enable_low_confidence, bool):
+            raise ConfigError(
+                f"{p}: enable_low_confidence must be true or false, not {enable_low_confidence!r}"
+            )
+
         exempt = _parse_exempt(raw.get("exempt"))
+        registry_check, registry_offline_ok, registry_max_age_days, registry_max_lookups = _parse_registry_check(
+            raw.get("registry_check")
+        )
         known_debt, known_debt_ceilings = _parse_known_debt(raw.get("known_debt"))
 
         for key in known_debt:
@@ -390,8 +547,63 @@ class PrufGateConfig:
             known_debt_ceilings=known_debt_ceilings,
             model_call_patterns=model_call_patterns,
             evidence_markers=evidence_markers,
+            registry_check=registry_check,
+            registry_offline_ok=registry_offline_ok,
+            registry_max_age_days=registry_max_age_days,
+            registry_max_lookups=registry_max_lookups,
+            enable_low_confidence=enable_low_confidence,
             source_path=p,
         )
+
+    @classmethod
+    def load_at_commit(cls, repo_root: Path | str, explicit_path: str | Path | None, commit: str) -> PrufGateConfig:
+        """The configuration as committed at `commit` (a commit or tree), or the
+        defaults when it had none. Only file contents are read; nothing runs.
+        A `--config` outside the repository is the operator's, not the
+        change's, and is read from disk."""
+        root = Path(repo_root)
+        explicit: str | None = None
+        rels = list(DEFAULT_CONFIG_FILES)
+        if explicit_path is not None:
+            cp = Path(explicit_path)
+            rel = posixpath.normpath(Path(os.path.relpath(cp, root)).as_posix() if cp.is_absolute() else cp.as_posix())
+            if rel.startswith("../") or rel == "..":
+                return cls.load(root, explicit_path)
+            explicit, rels = rel, [rel]
+        prefix = repo_prefix(root)
+        with tempfile.TemporaryDirectory() as tmp:
+            found = False
+            for rel in rels:
+                # Paths are taken as written, never resolved on disk: a link in the
+                # branch must not decide which base file is read.
+                try:
+                    blob = git_blob(commit, posixpath.normpath(prefix + rel), root)
+                except NotAFileError as e:
+                    raise BaseConfigNotAFile(str(e)) from e
+                except GitDiffError as e:
+                    raise ConfigError(f"cannot read {rel} at {commit[:12]}: {e}") from e
+                if blob is None:
+                    continue
+                found = True
+                dest = Path(tmp) / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(blob, encoding="utf-8")
+            if not found:
+                return cls()
+            try:
+                # Rooted in the copy: a relative --config must not resolve against
+                # the working directory and read the branch's file.
+                cfg = cls.load(tmp, Path(tmp) / explicit if explicit else None)
+            except ConfigError as e:
+                raise BaseConfigInvalid(str(e).replace(tmp + os.sep, "")) from e
+        # Name the repository file in reports, not the deleted temporary copy.
+        if cfg.source_path is not None:
+            cfg.source_path = root / Path(cfg.source_path).relative_to(tmp)
+        return cfg
+
+    def same_settings(self, other: PrufGateConfig) -> bool:
+        """True when both apply the same settings, wherever they were read from."""
+        return replace(self, source_path=None) == replace(other, source_path=None)
 
     @staticmethod
     def _read_raw_file(p: Path) -> Any:
