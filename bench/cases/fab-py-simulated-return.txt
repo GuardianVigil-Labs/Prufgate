@@ -1,0 +1,12 @@
+-- label.yaml --
+category: fabrication
+description: "Balance lookup returns a literal under a 'simulated' comment."
+must_fire: [simulated-return-value]
+must_not_fire: []
+-- base/accounts/balance.py --
+def balance(client, account_id):
+    return client.get_balance(account_id)
+-- head/accounts/balance.py --
+def balance(client, account_id):
+    # simulated response until the ledger API is wired up
+    return {"account": account_id, "balance": 1200}

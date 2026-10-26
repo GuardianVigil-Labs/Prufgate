@@ -138,3 +138,15 @@ class TestPrufGateCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BolaTargetGuard(unittest.TestCase):
+    def test_metadata_and_bad_scheme_targets_are_refused_before_any_probe(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch("prufgate.bola.bola_engine.check_server_active") as active:
+            for url in ("http://169.254.169.254/latest", "http://metadata.google.internal/", "file:///etc/passwd"):
+                err = io.StringIO()
+                with self.subTest(url=url), redirect_stderr(err), redirect_stdout(io.StringIO()):
+                    self.assertEqual(cli_main(["bola", tmp, "--url", url, "--token-a", "a", "--token-b", "b"]), 2)
+                    self.assertIn("prufgate bola:", err.getvalue())
+            active.assert_not_called()

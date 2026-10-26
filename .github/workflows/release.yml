@@ -79,6 +79,15 @@ jobs:
           /tmp/smoke/bin/prufgate --self-check
           printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
             | /tmp/smoke/bin/prufgate-mcp | grep -q "\"version\": \"${TAG#v}\""
+      - name: Build the zipapp and run it outside the checkout
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Same commit, same PyYAML sdist (hash-locked, from PyPI): same bytes.
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" python3 scripts/build_pyz.py --out pyz/prufgate.pyz
+          cd /tmp
+          test "$(python3 -I "${GITHUB_WORKSPACE}/pyz/prufgate.pyz" --version)" = "prufgate ${TAG#v}"
+          python3 -I "${GITHUB_WORKSPACE}/pyz/prufgate.pyz" --self-check
       - name: SBOM of the installed wheel
         run: |
           mkdir sbom
@@ -87,6 +96,12 @@ jobs:
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+      # Its own artifact: the PyPI job uploads everything in `dist`.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pyz
+          path: pyz/
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -189,9 +204,13 @@ jobs:
           path: dist/
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          name: pyz
+          path: dist/
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
           name: sbom
           path: sbom/
-      - name: Provenance of the wheel and sdist
+      - name: Provenance of the wheel, sdist and zipapp
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/*
@@ -214,18 +233,20 @@ jobs:
           ## Install
 
           - \`pipx install prufgate==${version}\` or \`pip install prufgate==${version}\`
+          - One file, Python 3.9+ only: \`python3 prufgate.pyz --version\` (verify it first, below)
           - \`docker run --rm -v "\$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:${version}\`
           - GitHub Action: \`uses: GuardianVigil-Labs/Prufgate@${TAG}\` (pin the commit SHA of this tag)
 
           ## Verify
 
-          \`SHA256SUMS\` lists the wheel and sdist, which are the files on PyPI. The image is signed keyless with Sigstore. The wheel, the sdist and the image carry build provenance; the wheel (\`prufgate-wheel.cdx.json\`) and the image carry an SBOM:
+          \`SHA256SUMS\` lists the wheel and sdist, which are the files on PyPI, and \`prufgate.pyz\`. The image is signed keyless with Sigstore. The wheel, the sdist, the zipapp and the image carry build provenance; the wheel (\`prufgate-wheel.cdx.json\`) and the image carry an SBOM:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
           gh attestation verify prufgate-${version}-py3-none-any.whl --repo ${GITHUB_REPOSITORY}
           gh attestation verify prufgate-${version}-py3-none-any.whl --repo ${GITHUB_REPOSITORY} \\
             --bundle prufgate-${version}-py3-none-any.whl.intoto.jsonl   # offline
+          gh attestation verify prufgate.pyz --repo ${GITHUB_REPOSITORY}
           cosign verify ghcr.io/guardianvigil-labs/prufgate:${version} \\
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${TAG}" \\
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -240,7 +261,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for f in dist/*.whl dist/*.tar.gz; do
+          for f in dist/*.whl dist/*.tar.gz dist/*.pyz; do
             gh attestation download "${f}" --repo "${GITHUB_REPOSITORY}" >/dev/null
             mv "sha256:$(sha256sum "${f}" | cut -d' ' -f1).jsonl" "${f}.intoto.jsonl"
             gh attestation verify "${f}" --bundle "${f}.intoto.jsonl" --repo "${GITHUB_REPOSITORY}"

@@ -1,0 +1,34 @@
+-- label.yaml --
+category: clean
+description: "Three copy-paste tests merged into one parametrised test."
+must_fire: []
+must_not_fire: [diff-test-count-drop]
+-- base/shop/parse.py --
+def parse_qty(s):
+    return int(s.strip())
+-- base/tests/test_parse.py --
+from shop.parse import parse_qty
+
+
+def test_plain():
+    assert parse_qty("3") == 3
+
+
+def test_spaces():
+    assert parse_qty(" 3 ") == 3
+
+
+def test_newline():
+    assert parse_qty("3\n") == 3
+-- head/shop/parse.py --
+def parse_qty(s):
+    return int(s.strip())
+-- head/tests/test_parse.py --
+import pytest
+
+from shop.parse import parse_qty
+
+
+@pytest.mark.parametrize("raw", ["3", " 3 ", "3\n"])
+def test_parse_qty(raw):
+    assert parse_qty(raw) == 3

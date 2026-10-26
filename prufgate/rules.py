@@ -6,7 +6,8 @@
   in `.prufgate/config.yaml` turns these rules on.
 
 Rules from other tools (gitleaks, zizmor, your own ast-grep rules, AI review comments)
-are not listed and count as `medium`: never hidden, never claimed exact.
+are not listed and count as `medium`: never hidden, never claimed exact, and never
+sent to AI adjudication.
 """
 
 from __future__ import annotations
@@ -114,8 +115,8 @@ _PREFIXES = ("anti-fabrication-", "pr-")
 SARIF_RANK = {HIGH: 90.0, MEDIUM: 60.0, LOW: 30.0}
 
 
-def confidence(rule_id: str) -> str:
-    """The confidence of `rule_id`, through aliases and engine prefixes."""
+def listed_confidence(rule_id: str) -> Optional[str]:
+    """The confidence of `rule_id` when it is a PrufGate rule listed here, else None."""
     rule = str(rule_id).strip()
     if rule.startswith("gate-failed-"):
         return HIGH
@@ -126,7 +127,12 @@ def confidence(rule_id: str) -> str:
         for alias in sorted(expand_rule_aliases(cand)):
             if alias in CONFIDENCE:
                 return CONFIDENCE[alias]
-    return DEFAULT_CONFIDENCE
+    return None
+
+
+def confidence(rule_id: str) -> str:
+    """The confidence of `rule_id`, through aliases and engine prefixes."""
+    return listed_confidence(rule_id) or DEFAULT_CONFIDENCE
 
 
 def reported(rule_id: str, enable_low_confidence: bool) -> bool:

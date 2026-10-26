@@ -1,0 +1,24 @@
+-- label.yaml --
+category: clean
+description: "A test gains stricter expectations."
+must_fire: []
+must_not_fire: []
+-- base/src/round.ts --
+export const round2 = (n: number) => Math.round(n * 100) / 100;
+-- base/src/round.test.ts --
+import { round2 } from "./round";
+
+test("rounds", () => {
+  expect(round2(1.234)).toBeDefined();
+  expect(round2(1.234)).toBe(1.23);
+});
+-- head/src/round.ts --
+export const round2 = (n: number) => Math.round(n * 100) / 100;
+-- head/src/round.test.ts --
+import { round2 } from "./round";
+
+test("rounds", () => {
+  expect(round2(1.234)).toBe(1.23);
+  expect(round2(1.235)).toBe(1.24);
+  expect(round2(-1.234)).toBe(-1.23);
+});

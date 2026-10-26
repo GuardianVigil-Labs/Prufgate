@@ -1,0 +1,23 @@
+-- label.yaml --
+category: fake-exit
+description: "conftest.py exits 0 before any test runs."
+must_fire: [test-fake-exit]
+must_not_fire: []
+-- base/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def shop():
+    return {}
+-- head/tests/conftest.py --
+import os
+
+import pytest
+
+os._exit(0)
+
+
+@pytest.fixture
+def shop():
+    return {}

@@ -1,0 +1,15 @@
+-- label.yaml --
+category: hollow-test
+description: "A new Jest test renders and checks nothing."
+must_fire: [zero-assertion-test]
+must_not_fire: []
+-- base/src/total.ts --
+export const total = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+-- head/src/total.ts --
+export const total = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+-- head/src/total.test.ts --
+import { total } from "./total";
+
+test("adds line items", () => {
+  total([1, 2, 3]);
+});

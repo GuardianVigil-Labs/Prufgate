@@ -1,0 +1,23 @@
+-- label.yaml --
+category: clean
+description: "A new import added together with its requirements entry."
+must_fire: []
+must_not_fire: [undeclared-or-hallucinated-import]
+-- base/requirements.txt --
+requests==2.31.0
+-- base/shop/fetch.py --
+import requests
+
+
+def get(url):
+    return requests.get(url, timeout=5).json()
+-- head/requirements.txt --
+requests==2.31.0
+pyyaml==6.0.1
+-- head/shop/fetch.py --
+import requests
+import yaml
+
+
+def get(url):
+    return yaml.safe_load(requests.get(url, timeout=5).text)

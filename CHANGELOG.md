@@ -25,11 +25,18 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - `prufgate init --agents-md` and `--bugbot` write a marked section telling other agents and AI reviewers to use PrufGate's findings.
 - A Claude Code plugin: `/plugin marketplace add GuardianVigil-Labs/Prufgate`, then `/plugin install prufgate@prufgate`.
 - GitLab Code Quality and JUnit reports: `--format gitlab|junit`, and `reports/gl-code-quality-report.json` and `reports/prufgate-junit.xml` from the batteries.
+- `prufgate check --ai-adjudicate`: an AI provider judges only low-confidence findings (yes/no) and can only dismiss them. It runs only when the base config enables `ai_adjudicate`. Never runs from the hooks, the MCP server or the API. Errors keep the finding.
+- `prufgate bench`: a labelled corpus of 90 invented cases with measured precision and recall (`docs/BENCHMARK.md`).
+- `prufgate bola --routes-from FILE`: extra route paths for the live probe from an OpenAPI, Postman or HAR file (GET and HEAD only, joined onto `--url`; hosts, headers and credentials in the file are ignored).
+- BOLA static checks cover Laravel implicit route-model binding, tenant values traced through local variables, Django generic views and DRF viewsets, NestJS global guards, Spring global and method security, Express/Fastify app-wide middleware and Rails member routes. `bola.global_tables` lists tables shared by every tenant.
+- `prufgate.pyz`: a reproducible single-file build (Python 3.9+), signed and attached to each release.
 
 ### Fixed
+- `test-input-special-casing` no longer treats dunder names such as `__main__` as test input.
 - A `.prufgate/config.yaml` with a non-string top-level key (for example a bare `?`) crashed with a `TypeError` instead of a configuration error. Found by fuzzing.
 
 ### Security
+- The live BOLA probe refuses cloud-metadata, link-local and non-HTTP targets on every path (CLI, batteries, MCP, API and running the engine directly).
 - The container's base images are pinned by digest, and every `pip install` in the image and the workflows uses hash-locked requirements.
 - The container and fuzz builds use setuptools 84.2.1 (CVE-2026-59890, GHSA-xmj3-9gf7-h52w), and install PrufGate from a locally built wheel.
 

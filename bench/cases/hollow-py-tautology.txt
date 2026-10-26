@@ -1,0 +1,18 @@
+-- label.yaml --
+category: hollow-test
+description: "The only assertion in a test is assert True."
+must_fire: [tautological-assertion]
+must_not_fire: []
+-- base/shop/discount.py --
+def discount(p):
+    return round(p * 0.9, 2)
+-- head/shop/discount.py --
+def discount(p):
+    return round(p * 0.9, 2)
+-- head/tests/test_discount.py --
+from shop.discount import discount
+
+
+def test_discount():
+    discount(10)
+    assert True

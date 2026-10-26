@@ -1,0 +1,13 @@
+-- label.yaml --
+category: clean
+description: "A README edit."
+must_fire: []
+must_not_fire: []
+-- base/README.md --
+# Shop
+
+Run `make test`.
+-- head/README.md --
+# Shop
+
+Run `make test`. Set `DATABASE_URL` first.

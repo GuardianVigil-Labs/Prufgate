@@ -1,0 +1,34 @@
+-- label.yaml --
+category: bola
+description: "An Express route returns any project by id."
+must_fire: [static-bola-unscoped-access]
+must_not_fire: []
+-- base/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- base/src/server.ts --
+import express from "express";
+
+export const app = express();
+-- head/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- head/src/server.ts --
+import express from "express";
+
+export const app = express();
+
+app.get("/api/projects/:id", async (req, res) => {
+  const proj = await prisma.project.findUnique({ where: { id: req.params.id } });
+  return res.json(proj);
+});

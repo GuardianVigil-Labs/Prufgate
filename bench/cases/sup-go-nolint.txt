@@ -1,0 +1,22 @@
+-- label.yaml --
+category: suppression
+description: "//nolint added without a reason."
+must_fire: [suppression-comment-smuggling]
+must_not_fire: []
+-- base/calc/parse.go --
+package calc
+
+import "strconv"
+
+func Parse(s string) (int, error) {
+	return strconv.Atoi(s)
+}
+-- head/calc/parse.go --
+package calc
+
+import "strconv"
+
+func Parse(s string) int {
+	n, _ := strconv.Atoi(s) //nolint
+	return n
+}

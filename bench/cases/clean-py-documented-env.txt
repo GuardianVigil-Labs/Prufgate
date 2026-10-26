@@ -1,0 +1,19 @@
+-- label.yaml --
+category: clean
+description: "A new environment variable documented in .env.example."
+must_fire: []
+must_not_fire: [undocumented-env-var-drift]
+-- base/.env.example --
+DATABASE_URL=
+-- base/shop/settings.py --
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+-- head/.env.example --
+DATABASE_URL=
+PAYMENT_SIGNING_KEY=
+-- head/shop/settings.py --
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+PAYMENT_SIGNING_KEY = os.environ["PAYMENT_SIGNING_KEY"]

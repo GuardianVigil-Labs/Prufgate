@@ -1,0 +1,22 @@
+-- label.yaml --
+category: clean
+description: "Error handling: catch, wrap and rethrow."
+must_fire: []
+must_not_fire: [canned-error-fallback]
+-- base/src/inventory.ts --
+export async function stockLevel(sku: string) {
+  const res = await fetch(`/inventory/${sku}`);
+  return res.json();
+}
+-- head/src/inventory.ts --
+export class InventoryError extends Error {}
+
+export async function stockLevel(sku: string) {
+  try {
+    const res = await fetch(`/inventory/${sku}`);
+    if (!res.ok) throw new InventoryError(`status ${res.status}`);
+    return res.json();
+  } catch (err) {
+    throw new InventoryError(`stock lookup failed: ${String(err)}`);
+  }
+}

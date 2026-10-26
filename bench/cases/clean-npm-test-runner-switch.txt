@@ -1,0 +1,21 @@
+-- label.yaml --
+category: clean
+description: "package.json test script moves from jest to vitest."
+must_fire: []
+must_not_fire: [test-script-neutered]
+-- base/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- head/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "vitest run"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"vitest": "^1.6.0"}
+}

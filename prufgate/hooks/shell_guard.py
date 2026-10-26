@@ -97,7 +97,7 @@ _GLOB_SAMPLES = sorted(_TEST_DIRS) + [
     ".github", "workflows", ".gitlab-ci.yml", ".prufgate", ".pre-commit-config.yaml", ".circleci", "Jenkinsfile",
     "azure-pipelines.yml", ".claude", "settings.json", "settings.local.json", ".git", "hooks",
     ".cursor", "hooks.json", ".codex", "config.toml", ".gemini", "config", "rules", ".prufgate.yml", ".prufgate.yaml",
-    ".claude-plugin", "marketplace.json", "plugins", "prufgate", "BUGBOT.md",
+    ".claude-plugin", "marketplace.json", "plugins", "prufgate", "BUGBOT.md", "adjudicate.json",
 ]
 
 
@@ -425,6 +425,10 @@ def protected_config(path: str) -> str | None:
     p = _canon(path).lower()
     if not p:
         return None
+    # The AI adjudication verdict cache ($XDG_CACHE_HOME/prufgate/adjudicate.json): a
+    # planted `real: false` entry would dismiss a finding without asking any provider.
+    if ("/" + p).endswith("/prufgate/adjudicate.json"):
+        return "PrufGate's AI adjudication cache"
     for ci in _CI_LOWER:
         # The path itself, something inside it, or a directory that contains it.
         if p == ci or p.startswith(ci + "/") or p.endswith("/" + ci) or ("/" + ci + "/") in p or ci.startswith(p + "/"):

@@ -20,9 +20,17 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from prufgate import PROJECT_URL, __version__, inline_ignore  # noqa: E402
-from prufgate.config import ConfigError, GitDiffError, _diff_base, git_blob, repo_prefix  # noqa: E402
+from prufgate.config import (  # noqa: E402
+    ConfigError,
+    GitDiffError,
+    PrufGateConfig,
+    _diff_base,
+    git_blob,
+    repo_prefix,
+)
 from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
-from prufgate.rules import SARIF_RANK, confidence, low_confidence_enabled, visible  # noqa: E402
+from prufgate.review.adjudicate import adjudicate  # noqa: E402
+from prufgate.rules import SARIF_RANK, confidence, visible  # noqa: E402
 from prufgate.sarif import add_partial_fingerprints  # noqa: E402
 
 # ANSI Color Codes
@@ -46,8 +54,10 @@ class Finding:
         file_path: str = "workspace",
         line: int = 1,
         details: str = "",
+        origin: str = "",
     ):
         self.tool = tool
+        self.origin = origin or tool  # "ai-review" for an AI review comment
         self.rule_id = rule_id
         self.severity = severity
         self.message = message.strip().replace("\n", " ")
@@ -228,6 +238,7 @@ def parse_raw_results(raw_dir: Path) -> List[Finding]:
                         Finding(
                             tool="pr-reviewer",
                             rule_id=inline_ignore.review_rule_id(str(item.get("title") or "review")),
+                            origin="ai-review" if item.get("ai") is True else "",
                             severity=item.get("severity", "P2"),
                             message=f"{item.get('title')}: {item.get('message')}",
                             file_path=item.get("file", "unknown"),
@@ -625,15 +636,21 @@ def generate_sarif(
     output_path: Path,
     workspace_dir: Optional[Path] = None,
     suppressed: Optional[List[tuple[Finding, str]]] = None,
+    ai_dismissed: Optional[List[tuple[Finding, str]]] = None,
 ) -> Dict[str, Any]:
     """Honoured inline ignores are written as results carrying an in-source
-    `suppressions` entry, which code scanning shows as dismissed with the reason.
-    Returns the SARIF document, which the GitLab and JUnit reports are built from."""
+    `suppressions` entry, which code scanning shows as dismissed with the reason;
+    AI-dismissed findings carry an `external` one. Returns the SARIF document,
+    which the GitLab and JUnit reports are built from."""
     rules_map: Dict[str, Dict[str, Any]] = {}
     results = []
 
-    entries = [(f, None) for f in findings] + [(f, reason) for f, reason in (suppressed or [])]
-    for f, reason in entries:
+    entries = (
+        [(f, None, None) for f in findings]
+        + [(f, reason, "inSource") for f, reason in (suppressed or [])]
+        + [(f, f"AI-dismissed: {reason}", "external") for f, reason in (ai_dismissed or [])]
+    )
+    for f, reason, kind in entries:
         if f.rule_id not in rules_map:
             rules_map[f.rule_id] = {
                 "id": f.rule_id,
@@ -679,7 +696,7 @@ def generate_sarif(
             },
         }
         if reason is not None:
-            result["suppressions"] = [{"kind": "inSource", "justification": reason}]
+            result["suppressions"] = [{"kind": kind, "justification": reason}]
         results.append(result)
 
     add_partial_fingerprints(results, workspace_dir)
@@ -712,9 +729,11 @@ def generate_markdown(
     manifest: Optional[Dict[str, Dict[str, Any]]] = None,
     errors: Optional[Dict[str, str]] = None,
     suppressed: Optional[List[tuple[Finding, str]]] = None,
+    ai_dismissed: Optional[List[tuple[Finding, str]]] = None,
 ) -> None:
     workspace, commit = get_git_info()
     suppressed = suppressed or []
+    ai_dismissed = ai_dismissed or []
     errors = errors or {}
     p0 = [f for f in findings if f.severity == "P0"]
     p1 = [f for f in findings if f.severity == "P1"]
@@ -808,6 +827,17 @@ def generate_markdown(
             rows.append(f"\n_... and {len(suppressed) - 50} more (see reports/prufgate.sarif)_")
         ign_sec = "\n".join(rows)
 
+    if not ai_dismissed:
+        ai_sec = "AI adjudication dismissed no finding."
+    else:
+        rows = [
+            f"- `{f.file_path}:{f.line}` `{f.rule_id}` [{f.severity}, {f.confidence} confidence] via `{f.tool}` — AI: {reason}"
+            for f, reason in ai_dismissed[:50]
+        ]
+        if len(ai_dismissed) > 50:
+            rows.append(f"\n_... and {len(ai_dismissed) - 50} more (see reports/prufgate.sarif)_")
+        ai_sec = "\n".join(rows)
+
     default_template = """# PrufGate Verification Report
 
 **Status:** {VERDICT_BADGE}<br>
@@ -828,6 +858,7 @@ PrufGate audited `{WORKSPACE_NAME}` across its 6 core verification engines (Prod
 | **P2 (Medium)** | {COUNT_P2} | Non-blocking |
 | **P3 (Low / Info)** | {COUNT_P3} | Non-blocking |
 | **Inline ignores** | {COUNT_IGNORED} | Suppressed with a reason (section 5) |
+| **AI-dismissed** | {COUNT_AI_DISMISSED} | Judged not real by AI adjudication (section 6) |
 
 ---
 
@@ -857,7 +888,15 @@ PrufGate audited `{WORKSPACE_NAME}` across its 6 core verification engines (Prod
 
 ---
 
-## 6. Audit Sign-off
+## 6. AI-dismissed
+
+Findings an AI provider judged not real (`ai_adjudicate`). They do not block; high-confidence findings are never sent.
+
+{AI_DISMISSED_SECTION}
+
+---
+
+## 7. Audit Sign-off
 
 - **SARIF Specification:** SARIF 2.1.0 emitted to `reports/prufgate.sarif`
 - **Verdict:** {VERDICT_TEXT}
@@ -883,6 +922,8 @@ PrufGate audited `{WORKSPACE_NAME}` across its 6 core verification engines (Prod
         ADVISORY_FINDINGS_SECTION=adv_sec,
         COUNT_IGNORED=len(suppressed),
         IGNORED_SECTION=ign_sec,
+        COUNT_AI_DISMISSED=len(ai_dismissed),
+        AI_DISMISSED_SECTION=ai_sec,
         VERDICT_TEXT=verdict_text,
     )
 
@@ -963,9 +1004,10 @@ def main() -> None:
         base_ref = "HEAD"
     config_error = ""
     try:
-        enable_low = low_confidence_enabled(workspace_dir, ref=base_ref)
+        cfg = PrufGateConfig.load(workspace_dir, ref=base_ref)
     except ConfigError as exc:
-        config_error, enable_low = str(exc), False
+        config_error, cfg = str(exc), PrufGateConfig()
+    enable_low = cfg.enable_low_confidence
 
     findings = parse_raw_results(raw_dir)
     try:
@@ -1007,11 +1049,29 @@ def main() -> None:
 
     suppressed = load_suppressions(raw_dir)
 
-    sarif = generate_sarif(findings, reports_dir / "prufgate.sarif", workspace_dir=workspace_dir, suppressed=suppressed)
+    # Only the configuration in effect (at the base ref) turns it on: it can dismiss
+    # findings, so no environment variable or flag a change could set may.
+    ai_dismissed: List[tuple[Finding, str]] = []
+    # The MCP server, the REST API and the agent hooks set PRUFGATE_NO_AI_ADJUDICATE.
+    if not config_error and cfg.ai_adjudicate.enabled and not os.environ.get("PRUFGATE_NO_AI_ADJUDICATE"):
+        verdicts, note = adjudicate(
+            [(f.rule_id, f.file_path, f.line, f.message, f.origin) for f in findings],
+            workspace_dir,
+            cfg.ai_adjudicate,
+            provider=os.environ.get("PRUFGATE_AI_PROVIDER") or "auto",
+        )
+        print(f"prufgate: {note}", file=sys.stderr)
+        ai_dismissed = [(findings[i], reason) for i, reason in verdicts.items()]
+        findings = [f for i, f in enumerate(findings) if i not in verdicts]
+
+    sarif = generate_sarif(
+        findings, reports_dir / "prufgate.sarif", workspace_dir=workspace_dir, suppressed=suppressed, ai_dismissed=ai_dismissed
+    )
     safe_write_text(reports_dir / "gl-code-quality-report.json", gitlab_code_quality(sarif, errors))
     safe_write_text(reports_dir / "prufgate-junit.xml", junit_xml(sarif, errors))
     generate_markdown(
-        findings, None, reports_dir / "prufgate-review.md", manifest=manifest, errors=errors, suppressed=suppressed
+        findings, None, reports_dir / "prufgate-review.md", manifest=manifest, errors=errors, suppressed=suppressed,
+        ai_dismissed=ai_dismissed,
     )
     print_ansi_table(findings, manifest=manifest, errors=errors)
 

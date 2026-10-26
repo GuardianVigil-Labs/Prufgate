@@ -1,0 +1,15 @@
+-- label.yaml --
+category: hollow-test
+description: "An empty inline snapshot accepts whatever is rendered."
+must_fire: [snapshot-blind-update-or-empty]
+must_not_fire: []
+-- base/src/fmt.ts --
+export const money = (n: number) => `$${n.toFixed(2)}`;
+-- head/src/fmt.ts --
+export const money = (n: number) => `$${n.toFixed(2)}`;
+-- head/src/fmt.test.ts --
+import { money } from "./fmt";
+
+it("formats money", () => {
+  expect(money(3)).toMatchInlineSnapshot();
+});

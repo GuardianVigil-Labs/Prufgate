@@ -1,0 +1,27 @@
+-- label.yaml --
+category: contract
+description: "A TypeScript import of a package missing from package.json."
+must_fire: [undeclared-or-hallucinated-import]
+must_not_fire: []
+-- base/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- base/src/date.ts --
+export const iso = (d: Date) => d.toISOString();
+-- head/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- head/src/date.ts --
+import { format } from "date-magic-utils";
+
+export const iso = (d: Date) => format(d, "iso");

@@ -1,0 +1,18 @@
+-- label.yaml --
+category: clean
+description: "Refactor: a helper extracted from a long function."
+must_fire: []
+must_not_fire: [zero-assertion-test]
+-- base/shop/invoice.py --
+def invoice_total(lines, tax_rate):
+    subtotal = 0
+    for line in lines:
+        subtotal += line["qty"] * line["price"]
+    return round(subtotal * (1 + tax_rate), 2)
+-- head/shop/invoice.py --
+def _subtotal(lines):
+    return sum(line["qty"] * line["price"] for line in lines)
+
+
+def invoice_total(lines, tax_rate):
+    return round(_subtotal(lines) * (1 + tax_rate), 2)

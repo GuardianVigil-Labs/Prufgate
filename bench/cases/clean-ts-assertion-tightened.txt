@@ -1,0 +1,21 @@
+-- label.yaml --
+category: clean
+description: "A loose toBeTruthy replaced with an exact value."
+must_fire: []
+must_not_fire: [diff-assertion-weakening]
+-- base/src/cart.ts --
+export const items = (c: { items: string[] }) => c.items.length;
+-- base/src/cart.test.ts --
+import { items } from "./cart";
+
+it("counts items", () => {
+  expect(items({ items: ["a"] })).toBeTruthy();
+});
+-- head/src/cart.ts --
+export const items = (c: { items: string[] }) => c.items.length;
+-- head/src/cart.test.ts --
+import { items } from "./cart";
+
+it("counts items", () => {
+  expect(items({ items: ["a"] })).toBe(1);
+});

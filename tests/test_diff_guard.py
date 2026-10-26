@@ -875,5 +875,20 @@ class TestTestConfigByValue(unittest.TestCase):
         self.assertEqual([f.rule for f in self._run()], ["test-config-weakening"])
 
 
+class TestAiAdjudicateDiff(unittest.TestCase):
+    """A diff that turns on AI adjudication, by configuration or an abbreviated flag."""
+
+    def test_config_section_and_abbreviated_flag_are_flagged(self) -> None:
+        for path, line in ((".prufgate/config.yaml", "ai_adjudicate: true"), (".github/workflows/ci.yml", "  - run: prufgate check --ai-adj")):
+            with self.subTest(path=path):
+                diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,2 @@\n version: 1\n+{line}\n"
+                self.assertIn("prufgate-config-self-exemption", [f.rule for f in scan_diff_for_tampering(diff)])
+
+    def test_turning_it_off_is_not_flagged(self) -> None:
+        path = ".prufgate/config.yaml"
+        diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,2 @@\n version: 1\n+ai_adjudicate: false\n"
+        self.assertEqual(scan_diff_for_tampering(diff), [])
+
+
 if __name__ == "__main__":
     unittest.main()

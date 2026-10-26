@@ -1,0 +1,25 @@
+-- label.yaml --
+category: fabrication
+description: "License check reports valid when the lookup errors."
+must_fire: [canned-error-fallback]
+must_not_fire: []
+-- base/license/check.go --
+package license
+
+func IsValid(key string) (bool, error) {
+	rec, err := lookup(key)
+	if err != nil {
+		return false, err
+	}
+	return rec.Active, nil
+}
+-- head/license/check.go --
+package license
+
+func IsValid(key string) (bool, error) {
+	rec, err := lookup(key)
+	if err != nil {
+		return true, nil
+	}
+	return rec.Active, nil
+}

@@ -1,0 +1,30 @@
+-- label.yaml --
+category: clean
+description: "A new table-driven Go test."
+must_fire: []
+must_not_fire: []
+-- base/calc/sum.go --
+package calc
+
+func Sum(a, b int) int {
+	return a + b
+}
+-- head/calc/sum.go --
+package calc
+
+func Sum(a, b int) int {
+	return a + b
+}
+-- head/calc/sum_test.go --
+package calc
+
+import "testing"
+
+func TestSum(t *testing.T) {
+	cases := []struct{ a, b, want int }{{1, 2, 3}, {-1, 1, 0}, {0, 0, 0}}
+	for _, c := range cases {
+		if got := Sum(c.a, c.b); got != c.want {
+			t.Errorf("Sum(%d, %d) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}

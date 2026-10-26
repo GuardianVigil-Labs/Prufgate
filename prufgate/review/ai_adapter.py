@@ -168,7 +168,7 @@ def _invoke_cli_agent(cli_name: str, prompt: str, timeout: int = 45) -> tuple[bo
         cmd = [binary, "exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
                "--ignore-user-config", "--ignore-rules", "-"]
     elif cli_name == "gemini":
-        cmd = [binary, "-p", "Review the diff given on stdin. Reply with the JSON array only; do not use tools.",
+        cmd = [binary, "-p", "Follow the request given on stdin and reply in the format it asks for; do not use tools.",
                "--approval-mode", "plan", "--output-format", "text"]
     elif cli_name == "opencode":
         # ponytail: `opencode run` documents the message only as an argument and no
@@ -199,7 +199,7 @@ def _invoke_cli_agent(cli_name: str, prompt: str, timeout: int = 45) -> tuple[bo
         return False, _redact(str(exc))[:200]
 
 
-def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30) -> tuple[bool, str]:
+def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30, system: str = AI_REVIEW_SYSTEM_PROMPT) -> tuple[bool, str]:
     try:
         if provider == "openai":
             api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -211,7 +211,7 @@ def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30) -> tuple[boo
                 "model": model,
                 "temperature": 0.0,
                 "messages": [
-                    {"role": "system", "content": AI_REVIEW_SYSTEM_PROMPT},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
             }
@@ -238,7 +238,7 @@ def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30) -> tuple[boo
             payload = {
                 "model": model,
                 "max_tokens": 2048,
-                "system": AI_REVIEW_SYSTEM_PROMPT,
+                "system": system,
                 "messages": [{"role": "user", "content": prompt}],
             }
             req = urllib.request.Request(
@@ -268,7 +268,7 @@ def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30) -> tuple[boo
                 "model": model,
                 "stream": False,
                 "messages": [
-                    {"role": "system", "content": AI_REVIEW_SYSTEM_PROMPT},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
             }

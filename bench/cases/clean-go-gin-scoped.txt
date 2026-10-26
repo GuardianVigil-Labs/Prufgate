@@ -1,0 +1,26 @@
+-- label.yaml --
+category: clean
+description: "A Gin handler scoped by the authenticated tenant."
+must_fire: []
+must_not_fire: [static-bola-unscoped-access]
+-- base/api/routes.go --
+package api
+
+func Version() string {
+	return "1"
+}
+-- head/api/routes.go --
+package api
+
+func Version() string {
+	return "1"
+}
+
+func Register(r *gin.Engine) {
+	r.GET("/api/documents/:id", RequireAuth(), func(c *gin.Context) {
+		var doc Document
+		tenantID := c.GetString("tenant_id")
+		db.Where("id = ? AND tenant_id = ?", c.Param("id"), tenantID).First(&doc)
+		c.JSON(200, doc)
+	})
+}

@@ -1,0 +1,25 @@
+-- label.yaml --
+category: bola
+description: "A Gin handler fetches a document by URL id only."
+must_fire: [static-bola-unscoped-access]
+must_not_fire: []
+-- base/api/routes.go --
+package api
+
+func Version() string {
+	return "1"
+}
+-- head/api/routes.go --
+package api
+
+func Version() string {
+	return "1"
+}
+
+func Register(r *gin.Engine) {
+	r.GET("/api/documents/:id", func(c *gin.Context) {
+		var doc Document
+		db.First(&doc, c.Param("id"))
+		c.JSON(200, doc)
+	})
+}

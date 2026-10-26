@@ -1,0 +1,25 @@
+-- label.yaml --
+category: hollow-test
+description: "A Go test that calls the function and never checks it."
+must_fire: [zero-assertion-test]
+must_not_fire: []
+-- base/calc/sum.go --
+package calc
+
+func Sum(a, b int) int {
+	return a + b
+}
+-- head/calc/sum.go --
+package calc
+
+func Sum(a, b int) int {
+	return a + b
+}
+-- head/calc/sum_test.go --
+package calc
+
+import "testing"
+
+func TestSum(t *testing.T) {
+	Sum(2, 3)
+}

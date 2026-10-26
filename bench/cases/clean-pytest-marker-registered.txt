@@ -1,0 +1,15 @@
+-- label.yaml --
+category: clean
+description: "pytest.ini registers a marker; nothing is deselected."
+must_fire: []
+must_not_fire: [test-config-weakening]
+-- base/pytest.ini --
+[pytest]
+testpaths = tests
+addopts = -q
+-- head/pytest.ini --
+[pytest]
+testpaths = tests
+addopts = -q
+markers =
+    slow: tests that take more than a second

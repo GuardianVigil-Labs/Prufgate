@@ -1,0 +1,21 @@
+-- label.yaml --
+category: config-weakening
+description: "package.json test script becomes 'jest || true'."
+must_fire: [test-script-neutered]
+must_not_fire: []
+-- base/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}
+-- head/package.json --
+{
+  "name": "shop-web",
+  "version": "1.0.0",
+  "scripts": {"test": "jest || true"},
+  "dependencies": {"express": "^4.19.2", "react": "^18.3.1"},
+  "devDependencies": {"jest": "^29.7.0"}
+}

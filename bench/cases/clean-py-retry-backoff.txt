@@ -1,0 +1,20 @@
+-- label.yaml --
+category: clean
+description: "A retry loop with sleep that returns the real result."
+must_fire: []
+must_not_fire: [synthetic-delay-mock]
+-- base/jobs/fetch.py --
+def fetch_report(client, rid):
+    return client.get(rid)
+-- head/jobs/fetch.py --
+import time
+
+
+def fetch_report(client, rid, attempts=3):
+    for i in range(attempts):
+        try:
+            return client.get(rid)
+        except TimeoutError:
+            if i == attempts - 1:
+                raise
+            time.sleep(2 ** i)

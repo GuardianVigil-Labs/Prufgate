@@ -46,7 +46,7 @@ Out of scope:
 
 ## Verify a release
 
-Every release is built by `.github/workflows/release.yml` from a `v*` tag, with no long-lived credentials: PyPI receives the packages through Trusted Publishing, and the container image is signed keyless with Sigstore. The wheel, the sdist and the image carry SLSA build provenance; the wheel and the image carry an SBOM. Replace `1.0.0` with the version you install.
+Every release is built by `.github/workflows/release.yml` from a `v*` tag, with no long-lived credentials: PyPI receives the packages through Trusted Publishing, and the container image is signed keyless with Sigstore. The wheel, the sdist, the zipapp and the image carry SLSA build provenance; the wheel and the image carry an SBOM. Replace `1.0.0` with the version you install.
 
 **The wheel and sdist.** The files on PyPI are the same files as on the GitHub release, so their SHA-256 matches `SHA256SUMS` (pip checks it when you pin `--hash=sha256:...` in a requirements file used with `--require-hashes`).
 
@@ -58,6 +58,16 @@ gh attestation verify prufgate-1.0.0-py3-none-any.whl --repo GuardianVigil-Labs/
 # Or offline, with the attestations attached to the release:
 gh attestation verify prufgate-1.0.0-py3-none-any.whl --repo GuardianVigil-Labs/Prufgate --bundle prufgate-1.0.0-py3-none-any.whl.intoto.jsonl
 pip install ./prufgate-1.0.0-py3-none-any.whl
+```
+
+**The zipapp** (`prufgate.pyz`, one file that needs only Python 3.9+; releases after 1.0.0) is on the GitHub release, listed in `SHA256SUMS` and attested like the wheel. It is reproducible: `SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" python3 scripts/build_pyz.py` on the tagged commit gives the same SHA-256 (the build downloads the PyYAML sdist pinned and hash-checked in `requirements.txt`; the same zlib is assumed).
+
+```sh
+gh release download v1.0.0 --repo GuardianVigil-Labs/Prufgate --pattern prufgate.pyz --pattern 'prufgate.pyz.intoto.jsonl' --pattern SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify prufgate.pyz --repo GuardianVigil-Labs/Prufgate
+gh attestation verify prufgate.pyz --repo GuardianVigil-Labs/Prufgate --bundle prufgate.pyz.intoto.jsonl   # offline
+python3 prufgate.pyz --version
 ```
 
 PyPI also shows the Trusted Publishing provenance of each file (the "Verified details" and "Provenance" sections of the project page).

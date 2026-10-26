@@ -1,0 +1,13 @@
+-- label.yaml --
+category: config-weakening
+description: "pytest addopts gains -k to deselect the failing tests."
+must_fire: [test-config-weakening]
+must_not_fire: []
+-- base/pytest.ini --
+[pytest]
+testpaths = tests
+addopts = -q
+-- head/pytest.ini --
+[pytest]
+testpaths = tests
+addopts = -q -k "not checkout"

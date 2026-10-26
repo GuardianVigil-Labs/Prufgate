@@ -1,0 +1,11 @@
+-- label.yaml --
+category: clean
+description: "ruff selects an extra rule set."
+must_fire: []
+must_not_fire: [linter-or-ci-config-weakening]
+-- base/ruff.toml --
+[lint]
+select = ["E", "F"]
+-- head/ruff.toml --
+[lint]
+select = ["E", "F", "B", "UP"]

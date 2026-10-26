@@ -1,0 +1,23 @@
+-- label.yaml --
+category: harness-edit
+description: "pytest_collection_modifyitems drops every collected test."
+must_fire: [pytest-collection-deselect]
+must_not_fire: []
+-- base/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def db():
+    return {}
+-- head/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def db():
+    return {}
+
+
+def pytest_collection_modifyitems(config, items):
+    items.clear()

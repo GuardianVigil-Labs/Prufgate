@@ -66,8 +66,19 @@ CONFIG_KEYS = {
     "evidence_markers",
     "registry_check",
     "enable_low_confidence",
+    "bola",
+    "ai_adjudicate",
 }
+BOLA_KEYS = {"global_tables"}
 REGISTRY_CHECK_KEYS = {"offline_ok", "max_age_days", "max_lookups"}
+# `ai_adjudicate` integer settings: (default, minimum, maximum).
+AI_ADJUDICATE_LIMITS = {
+    "max_findings": (20, 0, 500),
+    "timeout": (30, 1, 300),
+    "context_lines": (8, 0, 50),
+    "max_window_bytes": (2000, 200, 16000),
+}
+AI_ADJUDICATE_LEVELS = ("low", "medium")  # high-confidence findings are never sent
 
 DEBT_REF_RE = re.compile(r"^#\d+:\s*\S")
 
@@ -250,6 +261,60 @@ def _parse_registry_check(raw: Any) -> tuple[bool, bool, int, int]:
     return True, offline_ok, numbers[0], numbers[1]
 
 
+def _parse_bola(raw: Any) -> list[str]:
+    """`bola`: a mapping; `global_tables` lists tables shared by every tenant (countries,
+    currencies) that BOLA-TABLE-MISSING-TENANT-COLUMN must not flag."""
+    if raw is None:
+        return []
+    if not isinstance(raw, dict):
+        raise ConfigError("bola must be a mapping")
+    unknown = set(raw) - BOLA_KEYS
+    if unknown:
+        raise ConfigError(f"bola: unknown key(s): {', '.join(sorted(map(str, unknown)))}")
+    tables = _parse_str_list(raw.get("global_tables"), "bola.global_tables")
+    for t in tables:
+        if not re.fullmatch(r"[A-Za-z0-9_]+", t):
+            raise ConfigError(f"bola.global_tables: {t!r} is not a table name")
+    return tables
+@dataclass(frozen=True)
+class AiAdjudicate:
+    """`ai_adjudicate`: let an AI provider dismiss PrufGate's own low-confidence findings."""
+
+    enabled: bool = False
+    confidence: tuple[str, ...] = ("low",)
+    max_findings: int = AI_ADJUDICATE_LIMITS["max_findings"][0]
+    timeout: int = AI_ADJUDICATE_LIMITS["timeout"][0]
+    context_lines: int = AI_ADJUDICATE_LIMITS["context_lines"][0]
+    max_window_bytes: int = AI_ADJUDICATE_LIMITS["max_window_bytes"][0]
+
+
+def _parse_ai_adjudicate(raw: Any) -> AiAdjudicate:
+    """`ai_adjudicate`: true/false, or a mapping of settings (which turns it on
+    unless it says `enabled: false`)."""
+    if raw is None or isinstance(raw, bool):
+        return AiAdjudicate(enabled=bool(raw))
+    if not isinstance(raw, dict):
+        raise ConfigError("ai_adjudicate must be true, false or a mapping")
+    unknown = set(raw) - {"enabled", "confidence", *AI_ADJUDICATE_LIMITS}
+    if unknown:
+        raise ConfigError(f"ai_adjudicate: unknown key(s): {', '.join(sorted(map(str, unknown)))}")
+    enabled = raw.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ConfigError("ai_adjudicate.enabled must be true or false")
+    levels = raw.get("confidence", ["low"])
+    if isinstance(levels, str):
+        levels = [levels]
+    if not isinstance(levels, list) or not levels or any(lv not in AI_ADJUDICATE_LEVELS for lv in levels):
+        raise ConfigError("ai_adjudicate.confidence must list low and/or medium (high is never sent)")
+    numbers: dict[str, int] = {}
+    for key, (default, lo, hi) in AI_ADJUDICATE_LIMITS.items():
+        value = raw.get(key, default)
+        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
+            raise ConfigError(f"ai_adjudicate.{key} must be an integer from {lo} to {hi}")
+        numbers[key] = value
+    return AiAdjudicate(enabled=enabled, confidence=tuple(sorted(set(levels))), **numbers)
+
+
 def _parse_exempt(raw: Any) -> dict[tuple[str, str], str]:
     """Parse `exempt` in any of its three forms: a list of {path, rule, reason},
     {rule: [path, ...]} or {path: {rule: reason}}."""
@@ -354,6 +419,8 @@ class PrufGateConfig:
     registry_max_age_days: int = 30
     registry_max_lookups: int = 50
     enable_low_confidence: bool = False
+    bola_global_tables: list[str] = field(default_factory=list)
+    ai_adjudicate: AiAdjudicate = field(default_factory=AiAdjudicate)
     source_path: Path | None = None
 
     def is_excluded(self, rel_path: str) -> bool:
@@ -516,7 +583,9 @@ class PrufGateConfig:
                 f"{p}: enable_low_confidence must be true or false, not {enable_low_confidence!r}"
             )
 
+        ai_adjudicate = _parse_ai_adjudicate(raw.get("ai_adjudicate"))
         exempt = _parse_exempt(raw.get("exempt"))
+        bola_global_tables = _parse_bola(raw.get("bola"))
         registry_check, registry_offline_ok, registry_max_age_days, registry_max_lookups = _parse_registry_check(
             raw.get("registry_check")
         )
@@ -552,6 +621,8 @@ class PrufGateConfig:
             registry_max_age_days=registry_max_age_days,
             registry_max_lookups=registry_max_lookups,
             enable_low_confidence=enable_low_confidence,
+            bola_global_tables=bola_global_tables,
+            ai_adjudicate=ai_adjudicate,
             source_path=p,
         )
 

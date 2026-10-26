@@ -8,7 +8,7 @@ This repository is public. Every file, commit message, branch name, issue, pull 
 
 | Path | What it holds |
 |---|---|
-| `prufgate/cli.py` | The `prufgate` command: `check`, `test-audit`, `bola`, `review`, `verify`, `init`, `shell-guard`, `hook`, `mcp`, `api`, `--self-check`. |
+| `prufgate/cli.py` | The `prufgate` command: `check`, `test-audit`, `bola`, `review`, `verify`, `init`, `shell-guard`, `hook`, `bench`, `mcp`, `api`, `--self-check`. |
 | `prufgate/config.py` | `.prufgate/config.yaml` loading and validation. |
 | `prufgate/anti_fabrication/` | Engine 1: production code that fakes its result. `packs/` holds opt-in domain packs. |
 | `prufgate/anti_reward_hacking/` | Engine 2: tests that cannot fail. |
@@ -21,6 +21,7 @@ This repository is public. Every file, commit message, branch name, issue, pull 
 | `plugins/prufgate/`, `.claude-plugin/marketplace.json` | The Claude Code plugin and its marketplace. `hooks/hooks.json` is generated from `claude_plugin_hooks()`; the manifest version must equal `prufgate.__version__` (`tests/test_claude_plugin.py`). |
 | `runners/`, `prufgate.sh` | The shell batteries (`fast`, `full`) used by the GitHub Action and the container. |
 | `configs/` | ast-grep rules (`rules/` built in, `examples/` opt-in), gitleaks and ruff configuration. |
+| `prufgate/bench.py`, `bench/cases/` | `prufgate bench` and its labelled corpus: one `.txt` file per case, so the cheats in it never reach the gate's own scan (`docs/BENCHMARK.md`). |
 | `tests/` | `unittest` suites, including the leak guard `test_public_repo_hygiene.py`. |
 | `docs/` | User documentation. |
 

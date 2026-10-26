@@ -1,0 +1,18 @@
+-- label.yaml --
+category: contract
+description: "Code reads an environment variable .env.example does not document."
+must_fire: [undocumented-env-var-drift]
+must_not_fire: []
+-- base/.env.example --
+DATABASE_URL=
+-- base/shop/settings.py --
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+-- head/.env.example --
+DATABASE_URL=
+-- head/shop/settings.py --
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+PAYMENT_SIGNING_KEY = os.environ["PAYMENT_SIGNING_KEY"]

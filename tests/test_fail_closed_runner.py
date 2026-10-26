@@ -168,6 +168,11 @@ class Gate(unittest.TestCase):
         proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_BASE_REF": "--output=/tmp/x"})
         self.assertEqual(proc.returncode, 2)
 
+    def test_full_scan_hands_the_synthesizer_the_base_ref(self):
+        # The synthesizer reads ai_adjudicate (and the baseline) at the base in a full scan too.
+        run_gate(self.ws, "full", str(self.ws))
+        self.assertEqual((self.ws / "reports" / "raw" / "base_ref").read_text().strip(), "HEAD~1")
+
     def test_crashing_engine_fails_the_gate(self):
         (self.ws / ".prufgate").mkdir()
         (self.ws / ".prufgate" / "config.yaml").write_text("packs: [no-such-pack]\n")

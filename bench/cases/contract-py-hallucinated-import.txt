@@ -1,0 +1,22 @@
+-- label.yaml --
+category: contract
+description: "An import of a package no manifest declares."
+must_fire: [undeclared-or-hallucinated-import]
+must_not_fire: []
+-- base/requirements.txt --
+requests==2.31.0
+-- base/shop/fetch.py --
+import requests
+
+
+def get(url):
+    return requests.get(url, timeout=5).json()
+-- head/requirements.txt --
+requests==2.31.0
+-- head/shop/fetch.py --
+import requests
+import fastjsonx
+
+
+def get(url):
+    return fastjsonx.loads(requests.get(url, timeout=5).text)

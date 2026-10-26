@@ -1,0 +1,10 @@
+-- label.yaml --
+category: fake-exit
+description: "The Jest setup file calls process.exit(0)."
+must_fire: [test-fake-exit]
+must_not_fire: []
+-- base/jest.setup.js --
+global.fetch = require('./test/fetch-stub');
+-- head/jest.setup.js --
+global.fetch = require('./test/fetch-stub');
+process.exit(0);

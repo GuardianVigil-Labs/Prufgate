@@ -44,7 +44,21 @@ PrufGate needs Python 3.9 or newer and Git.
 ```bash
 pipx install prufgate     # or: pip install prufgate  (the `prufgate` and `prufgate-mcp` commands)
 prufgate --self-check     # every engine against its built-in fixtures
+uvx prufgate --version    # or run it without installing, with uv
 ```
+
+Or download one file, `prufgate.pyz`, from the [latest release](https://github.com/GuardianVigil-Labs/Prufgate/releases/latest) (releases after 1.0.0). It is a [zipapp](https://docs.python.org/3/library/zipapp.html) with PyYAML (pure Python) inside, so it needs nothing but Python 3.9 or newer:
+
+```bash
+curl -LO https://github.com/GuardianVigil-Labs/Prufgate/releases/latest/download/prufgate.pyz
+curl -LO https://github.com/GuardianVigil-Labs/Prufgate/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify prufgate.pyz --repo GuardianVigil-Labs/Prufgate
+python3 prufgate.pyz --self-check
+python3 prufgate.pyz check .
+```
+
+The hooks that `prufgate init --hooks` writes call `prufgate` on `PATH`, so for them install the file as a command: `install -m 755 prufgate.pyz ~/.local/bin/prufgate`. The zipapp runs every command a pip install has except `mcp` (use `pipx install prufgate` for the MCP server). Like a pip install, it does not include the shell batteries (`./prufgate.sh fast` / `full` with ast-grep, gitleaks and zizmor); `prufgate.pyz fast` and `full` run the Python engines only. For the full battery use the container image or a checkout. There are no native per-OS binaries: they would need a build on three operating systems for every release, and the zipapp covers the same need. `python3 scripts/build_pyz.py` builds the same file from a checkout; it downloads the hash-locked PyYAML sdist from PyPI and refuses one that does not match `requirements.txt`.
 
 Or run the signed container image, which adds the full gate with ast-grep, gitleaks and zizmor:
 
@@ -98,6 +112,7 @@ Exit codes are the same everywhere: **0** clean, **1** blocking findings (P0/P1)
 | Base-branch tests run against the head code (executes repository tests: sandbox or CI only, opt-in) | `prufgate verify --differential --allow-run-tests` |
 | PrufGate as a Claude Code plugin (hooks plus a `/prufgate:prufgate-check` skill) | `pipx install prufgate`, then in Claude Code `/plugin marketplace add GuardianVigil-Labs/Prufgate` and `/plugin install prufgate@prufgate` ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/AGENT_HOOKS.md#claude-code-plugin)) |
 | Other agents and AI reviewers (Cursor Bugbot, Copilot review) told to use PrufGate's findings | `prufgate init --agents-md` (AGENTS.md) and `--bugbot` (`.cursor/BUGBOT.md`): a marked section, updated in place on rerun ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/AGENT_HOOKS.md#instructions-for-agents-and-reviewers-agentsmd-bugbotmd)) |
+| An AI second opinion on PrufGate's own low-confidence findings only (opt-in, sends a few lines of code to a provider you choose) | `ai_adjudicate: true` in the configuration: see [AI adjudication](#ai-adjudication) |
 | Tools for an agent over MCP | `prufgate mcp`: nine read-only tools |
 | A service that scans on webhook | `prufgate api`: bearer token, loopback by default |
 
@@ -122,6 +137,15 @@ known_debt:
 
 In a pull request (any run with a base ref) PrufGate reads this file as it is on the base branch, so configuration changes take effect after merge: a change cannot exempt its own findings.
 
+## AI adjudication
+
+PrufGate is deterministic by default and sends nothing anywhere. Two opt-in modes use an AI provider you choose (a `claude` CLI, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or `OLLAMA_HOST`; `--ai-provider` names another):
+
+- `prufgate review --ai` asks the model to review the whole diff.
+- `ai_adjudicate: true` in the configuration (read at the base ref in a pull request, by `prufgate check` and the `prufgate.sh` gate; `--ai-adjudicate` alone does nothing without it) asks one yes/no question per **low-confidence** finding (`medium` too if configured): is this real? The prompt holds the rule, the finding message and a few redacted lines around it, never whole files.
+
+An adjudication verdict can only hide noise. A finding judged not real stops blocking and moves to an "AI-dismissed" list with the model's reason: a section of `prufgate check` output and of the Markdown report, and a SARIF `suppressions` entry of kind `external` (`AI-dismissed: <reason>`). High-confidence findings are never sent; nothing is ever added or raised. A provider error, a timeout, a reply that is not exactly `{"real": true|false, "reason": "..."}`, a run over its budget, or code that addresses the judge (a comment naming the AI, LLM, judge, reviewer or PrufGate) keeps the finding as it would be without AI. Verdicts are cached outside the repository. Settings: [docs/CONFIGURATION.md](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CONFIGURATION.md#ai-adjudication).
+
 ## Documentation
 
 - [Getting started](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/GETTING_STARTED.md): install, commands, reports, exit codes
@@ -130,6 +154,7 @@ In a pull request (any run with a base ref) PrufGate reads this file as it is on
 - [CI and agent integration](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CI_INTEGRATION.md): GitHub Action, other CI, agent hooks, MCP, REST API
 - [Custom rules](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CUSTOM_RULES.md): your own ast-grep rules and hooks
 - [Architecture](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/ARCHITECTURE.md)
+- [Benchmark](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/BENCHMARK.md): measured precision and recall on a labelled corpus, and how to add a case
 - [Changelog](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/CHANGELOG.md)
 
 ## Contributing and security

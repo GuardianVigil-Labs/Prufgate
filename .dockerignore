@@ -13,3 +13,5 @@ reports/
 .venv/
 .cursor/
 .ruff_cache/
+# The benchmark corpus (docs/BENCHMARK.md) is run from a checkout, not shipped.
+bench/

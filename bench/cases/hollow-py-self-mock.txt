@@ -1,0 +1,20 @@
+-- label.yaml --
+category: hollow-test
+description: "The test patches the very function it claims to test."
+must_fire: [self-mocked-unit-under-test]
+must_not_fire: []
+-- base/shop/tax.py --
+def tax(amount):
+    return round(amount * 0.2, 2)
+-- head/shop/tax.py --
+def tax(amount):
+    return round(amount * 0.2, 2)
+-- head/tests/test_tax.py --
+from unittest.mock import patch
+
+from shop import tax
+
+
+def test_tax():
+    with patch("shop.tax.tax", return_value=2.0):
+        assert tax.tax(10) == 2.0

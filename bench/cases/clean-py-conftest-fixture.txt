@@ -1,0 +1,24 @@
+-- label.yaml --
+category: clean
+description: "conftest.py gains an ordinary fixture."
+must_fire: []
+must_not_fire: [test-runner-monkeypatch, test-fake-exit]
+-- base/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def user():
+    return {'id': 1}
+-- head/tests/conftest.py --
+import pytest
+
+
+@pytest.fixture
+def user():
+    return {'id': 1}
+
+
+@pytest.fixture
+def cart(user):
+    return {'owner': user['id'], 'items': []}

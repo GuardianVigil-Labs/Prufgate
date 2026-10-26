@@ -1,0 +1,21 @@
+-- label.yaml --
+category: skipped-test
+description: "it.only left in, so the rest of the suite never runs."
+must_fire: [test-skip-smuggling]
+must_not_fire: []
+-- base/src/slug.ts --
+export const slug = (s: string) => s.toLowerCase();
+-- base/src/slug.test.ts --
+import { slug } from "./slug";
+
+it("lowercases", () => {
+  expect(slug("A")).toBe("a");
+});
+-- head/src/slug.ts --
+export const slug = (s: string) => s.toLowerCase();
+-- head/src/slug.test.ts --
+import { slug } from "./slug";
+
+it.only("lowercases", () => {
+  expect(slug("A")).toBe("a");
+});

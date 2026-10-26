@@ -1,0 +1,16 @@
+-- label.yaml --
+category: fabrication
+description: "Sync job swallows every error with a bare pass."
+must_fire: [unhandled-empty-catch]
+must_not_fire: []
+-- base/sync/run.py --
+def sync(source, target):
+    for item in source.items():
+        target.put(item)
+-- head/sync/run.py --
+def sync(source, target):
+    for item in source.items():
+        try:
+            target.put(item)
+        except Exception:
+            pass

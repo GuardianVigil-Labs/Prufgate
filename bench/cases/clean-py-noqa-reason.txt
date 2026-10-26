@@ -1,0 +1,14 @@
+-- label.yaml --
+category: clean
+description: "A # noqa with a specific code and a reason."
+must_fire: []
+must_not_fire: [suppression-comment-smuggling]
+-- base/shop/__init__.py --
+VERSION = '1.0'
+-- head/shop/__init__.py --
+from shop.cart import total  # noqa: F401 -- re-exported as the package API
+
+VERSION = '1.0'
+-- head/shop/cart.py --
+def total(xs):
+    return sum(xs)

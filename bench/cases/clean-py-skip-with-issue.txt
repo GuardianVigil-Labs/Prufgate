@@ -1,0 +1,20 @@
+-- label.yaml --
+category: clean
+description: "A skip that names the tracking issue."
+must_fire: []
+must_not_fire: [test-skip-smuggling]
+-- base/tests/test_tz.py --
+from shop.tz import offset
+
+
+def test_offset():
+    assert offset('UTC') == 0
+-- head/tests/test_tz.py --
+import pytest
+
+from shop.tz import offset
+
+
+@pytest.mark.skip(reason="tz database update pending, see #412")
+def test_offset():
+    assert offset('UTC') == 0

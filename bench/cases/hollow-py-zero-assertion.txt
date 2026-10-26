@@ -1,0 +1,17 @@
+-- label.yaml --
+category: hollow-test
+description: "A new test calls the parser and asserts nothing."
+must_fire: [zero-assertion-test]
+must_not_fire: []
+-- base/shop/parse.py --
+def parse_qty(s):
+    return int(s.strip())
+-- head/shop/parse.py --
+def parse_qty(s):
+    return int(s.strip())
+-- head/tests/test_parse.py --
+from shop.parse import parse_qty
+
+
+def test_parse_qty():
+    parse_qty(" 3 ")

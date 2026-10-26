@@ -1,0 +1,19 @@
+-- label.yaml --
+category: config-weakening
+description: "tsconfig turns strict mode off."
+must_fire: [linter-or-ci-config-weakening]
+must_not_fire: []
+-- base/tsconfig.json --
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "es2022"
+  }
+}
+-- head/tsconfig.json --
+{
+  "compilerOptions": {
+    "strict": false,
+    "target": "es2022"
+  }
+}

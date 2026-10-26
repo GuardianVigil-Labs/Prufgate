@@ -1,0 +1,27 @@
+-- label.yaml --
+category: clean
+description: "Go errors wrapped with %w instead of returned bare."
+must_fire: []
+must_not_fire: [canned-error-fallback]
+-- base/store/load.go --
+package store
+
+func Load(id string) (*Item, error) {
+	it, err := fetch(id)
+	if err != nil {
+		return nil, err
+	}
+	return it, nil
+}
+-- head/store/load.go --
+package store
+
+import "fmt"
+
+func Load(id string) (*Item, error) {
+	it, err := fetch(id)
+	if err != nil {
+		return nil, fmt.Errorf("load item: %w", err)
+	}
+	return it, nil
+}

@@ -1,0 +1,21 @@
+-- label.yaml --
+category: deleted-test
+description: "A failing test file is deleted while the code it covers stays."
+must_fire: [diff-test-file-deleted]
+must_not_fire: []
+-- base/shop/ship.py --
+def ship_cost(kg):
+    return 5 + kg * 2
+-- base/tests/test_ship.py --
+from shop.ship import ship_cost
+
+
+def test_ship_cost_light():
+    assert ship_cost(1) == 7
+
+
+def test_ship_cost_heavy():
+    assert ship_cost(10) == 25
+-- head/shop/ship.py --
+def ship_cost(kg):
+    return 4 + kg * 2

@@ -1,0 +1,15 @@
+-- label.yaml --
+category: fabrication
+description: "Upload waits on a timer and resolves with a canned success."
+must_fire: [synthetic-delay-mock]
+must_not_fire: []
+-- base/src/upload.ts --
+export async function upload(file: Blob): Promise<{ ok: boolean }> {
+  const res = await fetch("/upload", { method: "POST", body: file });
+  return { ok: res.ok };
+}
+-- head/src/upload.ts --
+export async function upload(file: Blob): Promise<{ ok: boolean }> {
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  return { ok: true };
+}

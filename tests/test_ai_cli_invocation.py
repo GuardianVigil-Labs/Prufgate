@@ -44,6 +44,8 @@ class CliInvocation(unittest.TestCase):
         self.assertEqual(argv[:2], ["/usr/bin/gemini", "-p"])
         self.assertEqual(argv[3:], ["--approval-mode", "plan", "--output-format", "text"])
         self.assertNotIn(PROMPT, argv[2])
+        # The same call serves review (a JSON array) and adjudication (a JSON object).
+        self.assertNotIn("array", argv[2])
         self.assertEqual(stdin, PROMPT)
 
     def test_opencode_is_one_shot_run(self) -> None:

@@ -307,16 +307,18 @@ class ConfigReadFromTheBaseRef(unittest.TestCase):
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertNotIn("prufgate-config-not-applied", res.stdout)
 
-    def test_without_a_base_ref_the_working_tree_config_applies(self):
+    def test_without_a_base_ref_the_config_at_head_applies(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(tmp, {}, {"README.md": "notes\n"})
             (repo / ".prufgate").mkdir()
             (repo / CFG).write_text(SELF_EXEMPT)
             (repo / "src/app.py").write_text(FAKE)
-            # Uncommitted changes and no base ref: the working-tree diff and config.
+            # Uncommitted changes and no base ref: the working-tree diff against HEAD, so an
+            # uncommitted configuration edit does not apply to it (as in the synthesizer).
             res = _run(repo, str(ROOT / "prufgate/cli.py"), "check", "--changed", "--format", "json")
-            self.assertNotIn(("unimplemented-production-stub", "P0"), _findings(res), res.stdout + res.stderr)
-            self.assertNotIn("prufgate-config-not-applied", res.stdout)
+            found = _findings(res)
+            self.assertIn(("unimplemented-production-stub", "P0"), found, res.stdout + res.stderr)
+            self.assertIn(("prufgate-config-self-exemption", "P1"), found)
             self.assertEqual(PrufGateConfig.load(repo).exempt, {("src/app.py", "unimplemented-production-stub"): "#1: fine"})
 
     def test_config_missing_at_the_base_loads_the_defaults(self):

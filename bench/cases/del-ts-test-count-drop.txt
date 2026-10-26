@@ -1,0 +1,29 @@
+-- label.yaml --
+category: deleted-test
+description: "Two of three Jest cases removed from a suite."
+must_fire: [diff-test-count-drop]
+must_not_fire: []
+-- base/src/round.ts --
+export const round2 = (n: number) => Math.round(n * 100) / 100;
+-- base/src/round.test.ts --
+import { round2 } from "./round";
+
+test("rounds down", () => {
+  expect(round2(1.234)).toBe(1.23);
+});
+
+test("rounds up", () => {
+  expect(round2(1.236)).toBe(1.24);
+});
+
+test("keeps integers", () => {
+  expect(round2(3)).toBe(3);
+});
+-- head/src/round.ts --
+export const round2 = (n: number) => Math.round(n * 100) / 100;
+-- head/src/round.test.ts --
+import { round2 } from "./round";
+
+test("keeps integers", () => {
+  expect(round2(3)).toBe(3);
+});

@@ -202,6 +202,7 @@ def execute_scan_worker(scan_id: str, battery: str, workspace: str, target_url: 
         env = os.environ.copy()
         env["WORKSPACE"] = str(ws_path)
         env["PRUFGATE_REPORTS_DIR"] = str(isolated_reports_dir)
+        env["PRUFGATE_NO_AI_ADJUDICATE"] = "1"  # the REST API never calls AI adjudication
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(PRUFGATE_ROOT), env.get("PYTHONPATH")]))
         if target_url:
             env["TARGET_URL"] = target_url
