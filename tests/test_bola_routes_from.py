@@ -2,6 +2,8 @@
 OpenAPI/Swagger, Postman v2.1 or HAR file. Only method and path are read; every
 path is probed on --url, never on the file's host."""
 
+from __future__ import annotations
+
 import contextlib
 import http.server
 import io
