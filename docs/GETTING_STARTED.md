@@ -11,7 +11,7 @@
 | Method | What you get |
 |---|---|
 | `pipx install prufgate` or `pip install prufgate` | The `prufgate` and `prufgate-mcp` commands from PyPI: every engine, the CLI, the MCP server and the API. The `prufgate.sh` shell gate is not part of the wheel. |
-| `docker run --rm -v "$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:1.0.0` | The signed release image (amd64 and arm64): the `prufgate` command plus the full `prufgate.sh` gate with ast-grep, gitleaks and zizmor. With no arguments it runs `fast` on the mounted repository; `... prufgate:1.0.0 prufgate check .` runs the CLI. |
+| `docker run --rm -v "$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:1.1.0` | The signed release image (amd64 and arm64): the `prufgate` command plus the full `prufgate.sh` gate with ast-grep, gitleaks and zizmor. With no arguments it runs `fast` on the mounted repository; `... prufgate:1.1.0 prufgate check .` runs the CLI. |
 | `pip install .` (in a checkout) | The same commands from a checkout. |
 | `./install.sh` | A `prufgate` launcher in `~/.local/bin` (or `/usr/local/bin`) that runs this checkout. Keep the checkout where it is. |
 | `make build`, then `bin/prufgate --docker ...` | A container image built from your checkout, the same as the release image. It is about 460 MB uncompressed (about 100 MB gzipped): the Python base and git, plus the three scanners (ast-grep about 55 MB, zizmor 27 MB, gitleaks 22 MB). The pip install and the GitHub Action need none of that. |
