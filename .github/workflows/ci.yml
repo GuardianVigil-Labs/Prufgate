@@ -40,9 +40,12 @@ jobs:
         # `python` is the setup-python interpreter on every runner.
         shell: bash
         run: |
+          # Windows: UTF-8 mode (the default from Python 3.15, PEP 686), so tests decode PrufGate's
+          # UTF-8 output as such. tests/test_console.py still checks a cp1252 stream directly.
+          if [ "$RUNNER_OS" = "Windows" ]; then export PYTHONUTF8=1; fi
           python -m pip install --require-hashes -r .github/ci-requirements.txt
           python prufgate/cli.py --self-check
-          python -m unittest discover -s tests 2>&1 | tee unittest.log || { grep -a -E "^(FAIL|ERROR): |^[A-Za-z.]*(Error|Exception): " unittest.log | cut -c1-220 | sort | uniq -c | sort -rn | head -150; exit 1; }
+          python -m unittest discover -s tests 2>&1 | tee unittest.log || { awk '/^(FAIL|ERROR): /{t=$0} /^  File ".*test_[a-z0-9_]*\.py", line [0-9]+/{f=$0} /^[A-Za-z_.]*(Error|Exception)(:|$)/{if(t!=""){print t; print "    " f; print "    " substr($0,1,300); t=""}}' unittest.log; exit 1; }
 
   self-test:
     name: Self-Checks & Engine Verifications

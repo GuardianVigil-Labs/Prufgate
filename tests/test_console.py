@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 class Console(unittest.TestCase):
     def test_a_cp1252_stream_is_switched_to_utf8(self):
         raw = io.BytesIO()
-        stream = io.TextIOWrapper(raw, encoding="cp1252")
+        stream = io.TextIOWrapper(raw, encoding="cp1252", newline="\n")
         with mock.patch.object(sys, "stdout", stream):
             utf8_output()
             print("╔═ ✔ passed")
