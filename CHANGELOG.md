@@ -4,6 +4,10 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Added
+- **Run summary and pull request comment.** The GitHub Action writes a short summary of each run to the job summary page: the verdict, the first ten findings (most severe first) and facts about the change against the base ref (lines changed in production code, tests, configuration and docs; assertion lines added and removed; dependency manifests and CI, lint, test or coverage configuration touched). With the new `pr_comment: 'true'` input it keeps the same summary as one pull request comment, edited on each run. `job_summary` (default `true`) turns the page off. The new `exit_code` output gives the gate's exit code. The summary never changes the verdict: if it cannot be written or posted, the step warns.
+- `prufgate pr-summary` prints that summary from `reports/prufgate.sarif` anywhere, and `--post-comment` keeps the pull request comment. Text from the code under review is shown only as inline code and redacted; a secret scanner's match is never included.
+
 ## [1.2.0]
 
 ### Changed
