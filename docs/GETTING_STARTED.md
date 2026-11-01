@@ -39,6 +39,7 @@ prufgate fix [PATH] [--base REF] [--format patch|github-suggestions] [--apply [-
 prufgate verify --differential [PATH] --allow-run-tests [--base REF] [--test-cmd CMD] [--timeout SECONDS] [--pass-env NAME] [--format text|json|sarif]
 prufgate verify --mutation [PATH] --allow-run-tests [--base REF] [--tool NAME] [--max-mutants N] [--timeout SECONDS] [--pass-env NAME] [--format text|json|sarif]
 prufgate init [PATH] [--hooks] [--overwrite]
+prufgate baseline [PATH] [--config FILE] [--stdout]
 prufgate shell-guard              Claude Code PreToolUse hook: hook JSON on stdin, exit 2 blocks
 prufgate base-ref [PATH]          print the base ref the changed scope would use (exit 2 if none is usable)
 prufgate pr-summary [PATH] [--sarif FILE] [--base REF] [--exit-code N] [--max-findings N] [--post-comment [--repo OWNER/NAME] [--pr N]]
@@ -54,6 +55,7 @@ prufgate --self-check | --version | --help
 - **`prufgate fix`** proposes deterministic fixes for safe findings: see [auto-fix](#auto-fix-prufgate-fix).
 - **`prufgate verify --differential`** runs the base branch's tests against the head code. **It executes the repository's tests**, so it refuses to run without `--allow-run-tests` or `PRUFGATE_ALLOW_RUN_TESTS=1`; run it only in a sandbox or a disposable CI job. See [ENGINES.md](ENGINES.md#differential-test-verification-opt-in-runs-repository-code).
 - **`prufgate verify --mutation`** mutates the lines the branch changed with a mutation tool you already have installed (mutmut, Stryker, PIT, gremlins, go-mutesting or cargo-mutants) and reports each surviving mutant. It runs the repository's tests, so it has the same opt-in. See [ENGINES.md](ENGINES.md#mutation-smoke-test-opt-in-runs-repository-code).
+- **`prufgate baseline`** scans the repository and records every current finding in `.prufgate/baseline.yaml`, so `prufgate check` and the gate report only new ones. Use it to adopt PrufGate on an existing codebase, and run it again as you fix findings. See [the baseline](CONFIGURATION.md#suppressing-findings).
 - **`prufgate init`** writes a starter `.prufgate/config.yaml`. With `--hooks` it also writes the coding-agent hooks described in [CI_INTEGRATION.md](CI_INTEGRATION.md#coding-agent-hooks).
 - **`prufgate shell-guard`** is the shell-command guard those hooks run before an agent's shell command: see [the shell guard](CI_INTEGRATION.md#shell-command-guard).
 - **`prufgate pr-summary`** prints a short Markdown summary of a gate run from `reports/prufgate.sarif`: the verdict, the first findings and facts about the change against the base ref the gate used. `--exit-code` passes the gate's exit code so a failed run never reads as a pass. With `--post-comment` it creates or updates one pull request comment, using a token from `PRUFGATE_GITHUB_TOKEN` or `GITHUB_TOKEN` (never a command-line argument). The GitHub Action runs it for you: see [the run summary](CI_INTEGRATION.md#the-run-summary-and-pull-request-comment). It exits 2 when the report cannot be read or the comment cannot be posted.
