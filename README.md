@@ -106,6 +106,7 @@ Exit codes are the same everywhere: **0** clean, **1** blocking findings (P0/P1)
 | Want | Use |
 |---|---|
 | A quick check while coding | `prufgate check --changed` |
+| What a finding means and how to fix it | `prufgate explain <rule>` (or `--list` for every rule): works offline |
 | Adopt it on a codebase that already has findings | `prufgate baseline`, then commit `.prufgate/baseline.yaml`: existing findings are recorded and only new ones are reported ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CONFIGURATION.md#suppressing-findings)) |
 | Findings inline in VS Code | The [VS Code extension](https://marketplace.visualstudio.com/items?itemName=GuardianVigil.prufgate) ([source](https://github.com/GuardianVigil-Labs/Prufgate/tree/main/editors/vscode)): runs `prufgate check --changed` on save, trusted workspaces only (install from a `.vsix` for now) |
 | One engine | `prufgate test-audit`, `prufgate bola`, `prufgate review` |
@@ -119,7 +120,7 @@ Exit codes are the same everywhere: **0** clean, **1** blocking findings (P0/P1)
 | PrufGate as a Claude Code plugin (hooks plus a `/prufgate:prufgate-check` skill) | `pipx install prufgate`, then in Claude Code `/plugin marketplace add GuardianVigil-Labs/Prufgate` and `/plugin install prufgate@prufgate` ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/AGENT_HOOKS.md#claude-code-plugin)) |
 | Other agents and AI reviewers (Cursor Bugbot, Copilot review) told to use PrufGate's findings | `prufgate init --agents-md` (AGENTS.md) and `--bugbot` (`.cursor/BUGBOT.md`): a marked section, updated in place on rerun ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/AGENT_HOOKS.md#instructions-for-agents-and-reviewers-agentsmd-bugbotmd)) |
 | An AI second opinion on PrufGate's own low-confidence findings only (opt-in, sends a few lines of code to a provider you choose) | `ai_adjudicate: true` in the configuration: see [AI adjudication](#ai-adjudication) |
-| Tools for an agent over MCP | `prufgate mcp`: nine read-only tools |
+| Tools for an agent over MCP | `prufgate mcp`: ten read-only tools, including `prufgate_explain` |
 | A service that scans on webhook | `prufgate api`: bearer token, loopback by default |
 
 The full command and option reference is in [docs/GETTING_STARTED.md](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/GETTING_STARTED.md), and every configuration key is in [docs/CONFIGURATION.md](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CONFIGURATION.md).

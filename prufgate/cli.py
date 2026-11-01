@@ -11,6 +11,7 @@ Subcommands:
   - `prufgate verify --mutation [path] [--base REF] [--tool NAME] [--max-mutants N] [--allow-run-tests]` (runs repository tests: opt-in only)
   - `prufgate init [path] [--hooks] [--agent NAME ...] [--agents-md] [--bugbot] [--overwrite]`
   - `prufgate baseline [path] [--config FILE] [--stdout]` (record existing findings in .prufgate/baseline.yaml)
+  - `prufgate explain RULE [--format text|json]` / `prufgate explain --list` (what a rule catches and how to fix it)
   - `prufgate shell-guard` (Claude Code PreToolUse hook: payload on stdin, exit 2 blocks)
   - `prufgate hook <agent> <event>` (fail-closed coding-agent hook adapters, docs/AGENT_HOOKS.md)
   - `prufgate transcript FILE [--format text|json|sarif] [--format-in claude|codex|text]` (suspicious commands an agent ran)
@@ -679,7 +680,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
             print(
-                "Fix the fabricated logic, hollow test, or unscoped BOLA query above before finishing.",
+                "Fix the fabricated logic, hollow test, or unscoped BOLA query above before finishing. "
+                "`prufgate explain <rule>` says how to fix each one.",
                 file=sys.stderr,
             )
             return 2
@@ -701,6 +703,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         print(f"✖ PrufGate check detected {len(findings)} finding(s) ({len(blockers)} blocker(s)):")
         for f in findings:
             print(f"  [{f['severity']}] [{f['engine']}:{f['rule']}] {f['file']}:{f['line']} — {f['message']}")
+        print(f"`prufgate explain {findings[0]['rule']}` (or any rule above) says what it catches and how to fix it.")
 
     return 1 if blockers else 0
 
@@ -1279,6 +1282,12 @@ def main(argv: list[str] | None = None) -> int:
     p_base.add_argument("--config", default=None, help="Path to .prufgate/config.yaml")
     p_base.add_argument("--stdout", action="store_true", help="Print the baseline instead of writing the file")
 
+    # 5h. prufgate explain
+    p_explain = subparsers.add_parser("explain", help="Show what a rule catches, how to fix it, and how to record a false positive")
+    p_explain.add_argument("rule", nargs="?", default=None, help="Rule ID as a report shows it")
+    p_explain.add_argument("--list", action="store_true", help="List every rule")
+    p_explain.add_argument("--format", choices=("text", "json"), default="text")
+
     # 6. prufgate mcp
     subparsers.add_parser("mcp", help="Start PrufGate Model Context Protocol (MCP) stdio server")
 
@@ -1314,6 +1323,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_test_audit(args)
     if args.subcommand == "baseline":
         return _cmd_baseline(args)
+    if args.subcommand == "explain":
+        from prufgate.explain import main as explain_main
+
+        return explain_main(args.rule, args.list, args.format)
     if args.subcommand == "bola":
         return _cmd_bola(args)
     if args.subcommand == "review":
