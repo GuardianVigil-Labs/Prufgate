@@ -42,7 +42,7 @@ jobs:
         run: |
           python -m pip install --require-hashes -r .github/ci-requirements.txt
           python prufgate/cli.py --self-check
-          python -m unittest discover -s tests 2>&1 | tee unittest.log || { grep -E "^(FAIL|ERROR): |^[A-Za-z.]*(Error|Exception): " unittest.log | cut -c1-220 | sort | uniq -c | sort -rn | head -150; exit 1; }
+          python -m unittest discover -s tests 2>&1 | tee unittest.log || { grep -a -E "^(FAIL|ERROR): |^[A-Za-z.]*(Error|Exception): " unittest.log | cut -c1-220 | sort | uniq -c | sort -rn | head -150; exit 1; }
 
   self-test:
     name: Self-Checks & Engine Verifications
