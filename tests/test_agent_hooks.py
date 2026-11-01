@@ -6,8 +6,8 @@ Payloads are invented, shaped after each agent's published hook reference."""
 import io
 import json
 import os
-import sys
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout

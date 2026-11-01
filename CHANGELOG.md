@@ -19,6 +19,7 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - **Windows:** output that cannot encode PrufGate's characters (piped output is cp1252 there) is switched to UTF-8 at start-up, so printing the summary table or a check mark no longer crashes the CLI, the gate or an engine.
 - **Windows:** the agent hook commands try `python` after `python3`, which Windows does not have.
 - **Windows:** `prufgate verify` refuses to start (exit 2) with a message naming WSL, a container or CI, instead of crashing: containing the repository's tests needs POSIX process groups.
+- **Windows:** `prufgate fix --apply` refuses a directory swapped for a symlink after its path check, as on Linux and macOS: without `dir_fd` it opens by path and then checks that the descriptor is the file at the resolved path inside the repository.
 - **Windows:** an invalid base configuration is named `.prufgate/config.yaml`, not `.prufgate\config.yaml`.
 - **Windows:** `diff-test-file-deleted` no longer reports a test deleted together with the module it imports. Import paths were compared with `\\` separators against the diff's `/`.
 - **macOS and symlinked workspaces:** SARIF locations are repository-relative when the workspace and a finding's path name the same folder through a symlink (macOS temporary folders live under `/var` -> `/private/var`), so code scanning shows them on the right file.
