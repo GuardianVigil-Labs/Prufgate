@@ -27,9 +27,9 @@ Languages: TypeScript, JavaScript (including `.vue` and `.svelte`), Python, Go, 
 | `stub-click-handler`, `disconnected-form-submit` | high | UI handlers that do nothing, or a submit that only calls `preventDefault()` (pack `web-ui`). |
 | `always-current-fake-timestamp`, `invented-event-timestamp` | medium | "Now minus a fixed offset" computed at read time, so static data looks fresh. |
 | `asserted-state` | low | A status literal asserted rather than derived. |
-| `unimplemented-production-stub` | high | `NotImplementedError`, `todo!()`, `panic("not implemented")`, `throw new Error("TODO")` in reachable code. |
+| `unimplemented-production-stub` | high | `NotImplementedError`, `todo!()`, `panic("not implemented")`, `throw new Error("TODO")` in reachable code. A Python method whose only statement is `raise NotImplementedError` is abstract, not reported, when its class is subclassed in the same file, is named like a base (`Base...`, `...Interface`, `Abstract...`, `...Mixin`) or inherits `ABC` / `Protocol`. |
 | `prompt-invents-finding` | medium | An LLM call asked for a structured decision (score, verdict, severity) with no runtime evidence in the prompt (pack `ai-safety`). |
-| `documentation-ip-or-domain` (`documentation-address`) | high | RFC 5737 / RFC 3849 addresses or `example.com` served from production code. |
+| `documentation-ip-or-domain` (`documentation-address`) | high | RFC 5737 / RFC 3849 addresses or `example.com` served from production code. Text inside Python strings (a docstring's `>>> client.get("https://example.org")`) is not code and is not reported. |
 | `stale-exemption`, `debt-ceiling-breached` | high | Config hygiene: an exemption that matches nothing, or a `known_debt` ceiling exceeded. |
 
 Opt-in pack `cti` (threat-intelligence products): `zero-jarm-as-fingerprint` and `empty-input-digest-as-sample` (high); `hardcoded-cve`, `hardcoded-attribution`, `ui-verdict-literal`, `substring-decides-verdict` and `llm-generated-intel` (medium); `keyword-selected-attribution` (low).
@@ -42,7 +42,7 @@ Languages and frameworks: Python (pytest, unittest), JavaScript/TypeScript (Jest
 
 | Rule | Confidence | What it flags |
 |---|---|---|
-| `zero-assertion-test` | medium | A test that runs code and asserts nothing. Pytest fixtures named `test_*` are not tests. |
+| `zero-assertion-test` | medium | A test that runs code and asserts nothing. Pytest fixtures named `test_*` are not tests. A call to a helper defined in the test file (for Go, in any `_test.go` file of the package) that itself asserts something other than a tautology counts as an assertion, and so do Spring `andExpect(...)`, Mocha's `done` handed on as a callback, type-level `assertEqual<A, B>(...)` / `expectTypeOf<T>()`, Prophecy `shouldBeCalled()` and Ruby `fail` in a block. A call that only throws on failure (`schema.parse(x)`) does not. |
 | `tautological-assertion` | high | `assert True`, `expect(true).toBe(true)`, `assertEqual(x, x)`, or an existence check as the only assertion. |
 | `self-mocked-unit-under-test` | medium | A test that mocks the module it is testing, or asserts a mock's own return value. |
 | `caught-and-ignored-test-exception` | medium | A test that catches the failure it should report. |
@@ -89,7 +89,7 @@ An issue reference is `#123`, `ABC-123` or an issue URL. Acronyms such as `UTF-8
 
 | Rule | Confidence | What it flags |
 |---|---|---|
-| `undeclared-or-hallucinated-import` | medium | An import of a package declared in none of `package.json`, `pyproject.toml` (dependency tables only), `requirements*.txt` / `requirements/`, `go.mod`, `Cargo.toml`. Standard-library modules, relative imports and local packages are not flagged. A hallucinated or typo-squatted name is how a malicious package gets installed. |
+| `undeclared-or-hallucinated-import` | medium | An import of a package declared in none of `package.json`, `pyproject.toml` (dependency tables only), `requirements*.txt` / `requirements/`, `go.mod`, `Cargo.toml`. Standard-library modules, relative imports and local packages are not flagged. A hallucinated or typo-squatted name is how a malicious package gets installed. Files under `examples/`, `example/`, `docs/` and `doc/` are not checked; a package a declared framework installs and documents (FastAPI's `starlette` and `pydantic`, SQLModel's `sqlalchemy`, Flask's `werkzeug` and `jinja2`, and a few more in `PROVIDED_BY`) counts as declared; an import under `if <flag>:` where the flag is set in a `try ... except ImportError` is optional. |
 | `ghost-symbol` | high | A name that its module does not define: `from shop.billing import charge_card` when `shop/billing.py` has no `charge_card`, a call such as `billing.charge_card(...)` on an imported module, or `import { charge } from "./billing"` when `./billing.ts` exports no `charge`. A hallucinated API. P1. See [ghost symbols](#ghost-symbols). |
 | `undocumented-env-var-drift` | high | `process.env.X` (unless a fallback follows: `?? 5000`, `\|\| 5000` or a ternary, after the read or on its variable within three lines, as in `const n = Number(process.env.X);` then `return n > 0 ? n : 5000;`), `os.environ["X"]` / `os.getenv("X")` without a default, `os.Getenv("X")`, `env!("X")`, when `X` is missing from `.env.example` (or `.env.sample`, `.env.template`) and from every config schema and deploy manifest (below). |
 | `frontend-backend-route-mismatch` | medium | `fetch("/api/...")` / `axios.*("/api/...")` to a path that no backend route or OpenAPI spec defines. |
@@ -162,7 +162,7 @@ The popular-name list is short and bundled in `prufgate/contract_guard/registry_
 
 Static analysis discovers routes in OpenAPI specs, Express/Fastify, NestJS, Next.js (App and Pages router, server actions), FastAPI, Flask, Django function views, Django generic views and DRF viewsets, Go (net/http, Gin, Echo, Chi), Spring, Rails controllers and Laravel controllers. Each handler is checked on its own, up to the next route:
 
-- **missing auth**: no recognised guard in the handler or the decorators above it, no file-wide middleware (`router.use`, `before_action`, a class-level guard, a Fastify `addHook('onRequest', auth)`), and no application-wide auth resolved from another file (below);
+- **missing auth**: no recognised guard in the handler or the decorators above it, no file-wide middleware (`router.use`, `before_action`, a class-level guard, a Fastify `addHook('onRequest', auth)`), and no application-wide auth resolved from another file (below); A FastAPI parameter typed with an alias of `Annotated[..., Depends(get_current_user)]` (`current_user: CurrentUser`, the alias defined anywhere in the workspace) is a guard.
 - **unscoped access** (`static-bola-unscoped-access`): a lookup such as `findUnique`, `findById`, `findByPk`, `get_object_or_404`, `find(params[:id])` keyed by request input, with no tenant key or caller identity inside the lookup and no explicit ownership comparison. A tenant ID taken from the URL alone does not count, because the caller chooses it.
 
 | Rule | Confidence | What it flags |
