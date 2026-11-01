@@ -198,7 +198,7 @@ It is a guard rail against an agent's habits, not a sandbox. Known gaps, which t
 }
 ```
 
-Nine tools, all read-only. They write nothing into the workspace.
+Ten tools, all read-only. They write nothing into the workspace.
 
 | Tool | Runs |
 |---|---|
@@ -211,8 +211,9 @@ Nine tools, all read-only. They write nothing into the workspace.
 | `prufgate_bola_check` | Engine 5 (static, or live with `target_url`) |
 | `prufgate_review` | Engine 6 |
 | `prufgate_summary` | A summary of the last report in `reports/` |
+| `prufgate_explain` | What a rule catches and how to fix it (`rule`; reads no workspace) |
 
-Arguments: `workspace_path`, `base_ref`, `changed_only`, `target_url`. Each result has `status` (`ok` or `error`), `passed`, `blockers` and `findings`. An engine that fails sets `isError`; it never comes back as `passed: true`.
+Arguments: `workspace_path`, `base_ref`, `changed_only`, `target_url` (and `rule` for `prufgate_explain`). Each result has `status` (`ok` or `error`), `passed`, `blockers` and `findings`. An engine that fails sets `isError`; it never comes back as `passed: true`.
 
 ## REST API
 
