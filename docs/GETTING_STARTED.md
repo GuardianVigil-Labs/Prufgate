@@ -3,6 +3,7 @@
 ## Requirements
 
 - Python 3.9 or newer, with PyYAML (installed automatically).
+- Linux or macOS for everything; both run the full test suite in CI. On Windows, `prufgate check` and every other Python command, the agent hooks (they run in Git Bash), the MCP server and the API work. Two parts need a POSIX system, so on Windows run them in WSL, a Linux container or CI: the shell gate `prufgate.sh` (and so the GitHub Action, which uses Linux runners anyway), and `prufgate verify`, which refuses to start there because it cannot contain the repository's tests without process groups.
 - Git, for anything that looks at changes (`--changed`, `--base`, the diff engines).
 - Optional, for the full `prufgate.sh` gate: [ast-grep](https://ast-grep.github.io/), [gitleaks](https://github.com/gitleaks/gitleaks) and [zizmor](https://docs.zizmor.sh/). A step whose tool is missing is reported as skipped.
 

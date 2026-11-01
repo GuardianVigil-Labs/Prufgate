@@ -139,6 +139,7 @@ class Synthesizer(unittest.TestCase):
             self.assertFalse((Path(tmp) / "reports" / "prufgate-review.md").is_symlink())
 
 
+@unittest.skipIf(sys.platform == "win32", "the shell gate (prufgate.sh, runners/) needs a POSIX shell: on Windows use prufgate check, WSL or the container")
 class Gate(unittest.TestCase):
     def setUp(self):
         self._tmp = repo_with_committed_change()

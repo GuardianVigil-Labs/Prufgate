@@ -952,6 +952,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print("prufgate verify: name one mode (--differential or --mutation)", file=sys.stderr)
         return 2
     mode = "--differential" if args.differential else "--mutation"
+    if not repo_runner.supported():
+        print(
+            f"prufgate verify {mode} is not available on Windows: it contains the repository's tests with "
+            "process groups, which Windows does not have. Run it in WSL, a Linux container or CI.",
+            file=sys.stderr,
+        )
+        return 2
     if not repo_runner.opted_in(args.allow_run_tests):
         print(
             f"prufgate verify {mode} runs the repository's tests, which is code from the repository "
