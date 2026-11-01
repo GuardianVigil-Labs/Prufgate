@@ -7,6 +7,11 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 ### Added
 - **Run summary and pull request comment.** The GitHub Action writes a short summary of each run to the job summary page: the verdict, the first ten findings (most severe first) and facts about the change against the base ref (lines changed in production code, tests, configuration and docs; assertion lines added and removed; dependency manifests and CI, lint, test or coverage configuration touched). With the new `pr_comment: 'true'` input it keeps the same summary as one pull request comment, edited on each run. `job_summary` (default `true`) turns the page off. The new `exit_code` output gives the gate's exit code. The summary never changes the verdict: if it cannot be written or posted, the step warns.
 - `prufgate pr-summary` prints that summary from `reports/prufgate.sarif` anywhere, and `--post-comment` keeps the pull request comment. Text from the code under review is shown only as inline code and redacted; a secret scanner's match is never included.
+- **`prufgate baseline`** records every current finding in `.prufgate/baseline.yaml`, so a codebase that already has findings can adopt PrufGate and be blocked only by new ones. Each entry carries a fingerprint (the rule and the finding's line, with a counter for identical lines), so it hides that one finding: a new finding of the same rule in the same file is still reported, and so is a baselined one whose line is edited, while lines moving around it change nothing. `--stdout` prints the file instead of writing it.
+
+### Changed
+- **`prufgate check`, and so the MCP server and the REST API, honour the baseline** like the `prufgate.sh` gate: read at the base ref in a changed scan, so a branch cannot baseline its own findings. `check` prints how many findings the baseline left out, writes them to SARIF as suppressed results, and in a full scan names entries that no longer match anything. A baseline that does not parse is still ignored (every finding is reported), and now says so.
+- Baseline rule names match through rule aliases and with or without the `anti-fabrication-` prefix, in `check` and the gate alike. `prufgate-config-self-exemption`, `prufgate-config-not-applied` and `debt-ceiling-breached` can no longer be hidden by a baseline entry.
 
 ## [1.2.0]
 
