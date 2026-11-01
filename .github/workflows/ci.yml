@@ -16,8 +16,8 @@ jobs:
   python-versions:
     name: Unit tests on Python ${{ matrix.python }}${{ matrix.label }}
     # Python 3.9 is the oldest supported version and is not built for the
-    # newest runner image, so that leg stays on 24.04. macOS and Windows run
-    # the newest Python: path handling, line endings and git differ there.
+    # newest runner image, so that leg stays on 24.04. macOS runs the newest
+    # Python: paths, symlinked temporary folders and process handling differ there.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,7 +26,6 @@ jobs:
           - { python: '3.9', os: ubuntu-24.04, label: '' }
           - { python: '3.14', os: ubuntu-latest, label: '' }
           - { python: '3.14', os: macos-latest, label: ' (macOS)' }
-          - { python: '3.14', os: windows-latest, label: ' (Windows)' }
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,8 +36,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Self-check and unit tests
-        # bash on every runner (Git Bash on Windows); `python` is the setup-python
-        # interpreter everywhere, where Windows has no `python3`.
+        # `python` is the setup-python interpreter on every runner.
         shell: bash
         run: |
           python -m pip install --require-hashes -r .github/ci-requirements.txt

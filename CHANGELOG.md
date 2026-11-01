@@ -11,7 +11,7 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - **`prufgate baseline`** records every current finding in `.prufgate/baseline.yaml`, so a codebase that already has findings can adopt PrufGate and be blocked only by new ones. Each entry carries a fingerprint (the rule and the finding's line, with a counter for identical lines), so it hides that one finding: a new finding of the same rule in the same file is still reported, and so is a baselined one whose line is edited, while lines moving around it change nothing. `--stdout` prints the file instead of writing it.
 
 ### Changed
-- CI runs the unit tests on macOS and Windows as well as Linux.
+- CI runs the unit tests on macOS as well as Linux.
 - **`prufgate check`, and so the MCP server and the REST API, honour the baseline** like the `prufgate.sh` gate: read at the base ref in a changed scan, so a branch cannot baseline its own findings. `check` prints how many findings the baseline left out, writes them to SARIF as suppressed results, and in a full scan names entries that no longer match anything. A baseline that does not parse is still ignored (every finding is reported), and now says so.
 - Baseline rule names match through rule aliases and with or without the `anti-fabrication-` prefix, in `check` and the gate alike. `prufgate-config-self-exemption`, `prufgate-config-not-applied` and `debt-ceiling-breached` can no longer be hidden by a baseline entry.
 
