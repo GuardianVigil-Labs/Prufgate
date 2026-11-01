@@ -11,8 +11,15 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - **`prufgate baseline`** records every current finding in `.prufgate/baseline.yaml`, so a codebase that already has findings can adopt PrufGate and be blocked only by new ones. Each entry carries a fingerprint (the rule and the finding's line, with a counter for identical lines), so it hides that one finding: a new finding of the same rule in the same file is still reported, and so is a baselined one whose line is edited, while lines moving around it change nothing. `--stdout` prints the file instead of writing it.
 
 ### Changed
+- CI runs the unit tests on macOS and Windows as well as Linux.
 - **`prufgate check`, and so the MCP server and the REST API, honour the baseline** like the `prufgate.sh` gate: read at the base ref in a changed scan, so a branch cannot baseline its own findings. `check` prints how many findings the baseline left out, writes them to SARIF as suppressed results, and in a full scan names entries that no longer match anything. A baseline that does not parse is still ignored (every finding is reported), and now says so.
 - Baseline rule names match through rule aliases and with or without the `anti-fabrication-` prefix, in `check` and the gate alike. `prufgate-config-self-exemption`, `prufgate-config-not-applied` and `debt-ceiling-breached` can no longer be hidden by a baseline entry.
+
+### Fixed
+- **Windows:** `diff-test-file-deleted` no longer reports a test deleted together with the module it imports. Import paths were compared with `\\` separators against the diff's `/`.
+- **macOS and symlinked workspaces:** SARIF locations are repository-relative when the workspace and a finding's path name the same folder through a symlink (macOS temporary folders live under `/var` -> `/private/var`), so code scanning shows them on the right file.
+- **`prufgate verify` outside Linux:** a process the repository's tests start and detach (`setsid`, a double fork) no longer outlives the run. Linux keeps its subreaper; elsewhere every process the command starts carries a run marker in its environment and is found with `ps` at the end. A process that clears its own environment can still escape it there.
+
 
 ## [1.2.0]
 

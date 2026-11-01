@@ -629,10 +629,22 @@ def _normalize_sarif_uri(file_path: str, workspace_dir: Optional[Path] = None) -
         return "PRUFGATE_AUDIT_TARGET"
     if raw.startswith(("http://", "https://")):
         return "PRUFGATE_DYNAMIC_TARGET"
+    raw = raw.replace("\\", "/")
     if workspace_dir:
-        ws_prefix = str(workspace_dir.resolve()) + "/"
-        if raw.startswith(ws_prefix):
-            raw = raw[len(ws_prefix) :]
+        # The workspace and an absolute finding path may name the same folder through a symlink
+        # (macOS: /var -> /private/var), so both spellings of each are compared.
+        prefixes = {str(p).replace("\\", "/").rstrip("/") + "/" for p in (workspace_dir, workspace_dir.resolve())}
+        spellings = [raw]
+        if os.path.isabs(raw):
+            try:
+                spellings.append(str(Path(raw).resolve()).replace("\\", "/"))
+            except (OSError, RuntimeError):
+                pass
+        for spelled in spellings:
+            prefix = next((p for p in prefixes if spelled.startswith(p)), None)
+            if prefix:
+                raw = spelled[len(prefix) :]
+                break
     raw = re.sub(r"^(?:/workspace/|\./|/)+", "", raw)
     return raw or "PRUFGATE_AUDIT_TARGET"
 
