@@ -16,6 +16,7 @@ Subcommands:
   - `prufgate transcript FILE [--format text|json|sarif] [--format-in claude|codex|text]` (suspicious commands an agent ran)
   - `prufgate bench [--cases DIR] [--format text|json|markdown] [--rule RULE] [--min-precision X] [--min-recall Y]`
   - `prufgate export-rules [--format semgrep] [--out FILE] [--pack cti]`
+  - `prufgate pr-summary [path] [--sarif FILE] [--base REF] [--exit-code N] [--max-findings N] [--post-comment] [--repo OWNER/NAME] [--pr N]`
   - `prufgate mcp`
   - `prufgate api [--host 127.0.0.1] [--port 8000]`
   - `prufgate fast` / `prufgate full` (shortcuts for `check --changed` / `check`)
@@ -1252,6 +1253,24 @@ def main(argv: list[str] | None = None) -> int:
     p_export.add_argument("--out", default=None, metavar="FILE", help="Write to FILE instead of standard output")
     p_export.add_argument("--pack", action="append", choices=("cti",), default=[], help="Also export an opt-in pack's rules")
 
+    # 5f. prufgate pr-summary
+    p_sum = subparsers.add_parser(
+        "pr-summary",
+        help="Print a Markdown summary of a gate run for a pull request; optionally keep it as one PR comment",
+    )
+    p_sum.add_argument("path", nargs="?", default=".", help="Workspace (default: current directory)")
+    p_sum.add_argument("--sarif", default=None, help="SARIF report to summarise (default: reports/prufgate.sarif)")
+    p_sum.add_argument("--base", default=None, help="Base ref for the change facts (default: the ref the gate used)")
+    p_sum.add_argument("--exit-code", type=int, default=None, help="The gate's exit code, shown as the verdict")
+    p_sum.add_argument("--max-findings", type=int, default=10, help="Findings listed before the rest are counted only")
+    p_sum.add_argument(
+        "--post-comment",
+        action="store_true",
+        help="Create or update one pull request comment (token from PRUFGATE_GITHUB_TOKEN or GITHUB_TOKEN)",
+    )
+    p_sum.add_argument("--repo", default=None, help="owner/name (default: GITHUB_REPOSITORY)")
+    p_sum.add_argument("--pr", type=int, default=None, help="Pull request number (default: from GITHUB_EVENT_PATH)")
+
     # 5g. prufgate baseline
     p_base = subparsers.add_parser(
         "baseline", help="Record every current finding in .prufgate/baseline.yaml so that only new findings are reported"
@@ -1323,6 +1342,11 @@ def main(argv: list[str] | None = None) -> int:
         from prufgate.export_rules import main as export_main
 
         return export_main(args.format, args.out, tuple(args.pack))
+    if args.subcommand == "pr-summary":
+        from prufgate.pr_summary import main as summary_main
+
+        return summary_main(args.path, args.sarif, args.base, args.exit_code, args.max_findings,
+                            args.post_comment, args.repo, args.pr)
     if args.subcommand == "mcp":
         from prufgate.mcp.prufgate_mcp_server import main as mcp_main
 
