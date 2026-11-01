@@ -96,6 +96,7 @@ Then, in your project:
 prufgate check .                          # engines 1-5 on the whole repository
 prufgate check --changed --base origin/main   # only what this branch changed
 prufgate init --hooks                     # starter config + coding-agent hooks
+prufgate baseline                         # record existing findings; only new ones are reported
 ```
 
 Exit codes are the same everywhere: **0** clean, **1** blocking findings (P0/P1), **2** PrufGate could not run (bad config, bad base ref, unreadable file, engine crash). A crash never reads as a pass.
@@ -105,6 +106,7 @@ Exit codes are the same everywhere: **0** clean, **1** blocking findings (P0/P1)
 | Want | Use |
 |---|---|
 | A quick check while coding | `prufgate check --changed` |
+| Adopt it on a codebase that already has findings | `prufgate baseline`, then commit `.prufgate/baseline.yaml`: existing findings are recorded and only new ones are reported ([details](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CONFIGURATION.md#suppressing-findings)) |
 | Findings inline in VS Code | The [VS Code extension](https://marketplace.visualstudio.com/items?itemName=GuardianVigil.prufgate) ([source](https://github.com/GuardianVigil-Labs/Prufgate/tree/main/editors/vscode)): runs `prufgate check --changed` on save, trusted workspaces only (install from a `.vsix` for now) |
 | One engine | `prufgate test-audit`, `prufgate bola`, `prufgate review` |
 | The full gate with SARIF and Markdown reports | `./prufgate.sh fast` (changed files) or `./prufgate.sh full`, from a checkout. Reports go to `reports/prufgate.sarif`, `reports/prufgate-review.md`, `reports/gl-code-quality-report.json` (GitLab Code Quality) and `reports/prufgate-junit.xml`. |
