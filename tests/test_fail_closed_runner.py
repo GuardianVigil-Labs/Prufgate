@@ -14,25 +14,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import venv
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-def installed_python(root: Path) -> Path:
-    """An editable test installation in a venv, visible even under Python -I."""
-    venv.EnvBuilder(with_pip=False, system_site_packages=True).create(root)
-    site = root / ("Lib/site-packages" if sys.platform == "win32" else
-                   f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
-    (site / "prufgate-fixture.pth").write_text(str(ROOT) + "\n", encoding="utf-8")
-    return root / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-
 
 from prufgate import cli  # noqa: E402
 from prufgate.config import ConfigError, PrufGateConfig, path_matches_pattern  # noqa: E402
 from prufgate.hooks.agent_hooks import HOOK_COMMAND, HookConfigError, init_workspace  # noqa: E402
+from tests.support import installed_python
 
 # Hermetic: CI exports these on pull requests; a test that needs a base ref sets it.
 for _ci_var in ("GITHUB_BASE_REF", "PRUFGATE_BASE_REF"):
@@ -165,6 +157,15 @@ class Gate(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout[-2000:] + proc.stderr[-2000:])
         findings = json.loads((self.ws / "reports" / "raw" / "anti_fabrication.json").read_text())
         self.assertTrue(any(f["file"].endswith("users.ts") for f in findings))
+
+    def test_workspace_under_a_symlinked_parent_is_scanned(self):
+        # macOS /tmp and /home -> /var/home put a link above the workspace; it is not the repository's.
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "link"
+            link.symlink_to(self.ws.parent)
+            proc = run_gate(self.ws, "fast", str(link / self.ws.name))
+            self.assertEqual(proc.returncode, 1, proc.stdout[-2000:] + proc.stderr[-2000:])
+            self.assertTrue((self.ws / "reports" / "prufgate.sarif").stat().st_size > 0)
 
     def test_github_base_ref_is_used(self):
         git(self.ws, "update-ref", "refs/remotes/origin/main", "main")

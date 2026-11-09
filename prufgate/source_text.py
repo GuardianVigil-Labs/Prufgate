@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
+
+# Languages whose single-delimiter ' and " strings cannot span a line. A stray
+# quote there (an apostrophe in JSX text) must not mask the rest of the file.
+_LINE_STRINGS = {
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte",
+    ".py", ".go", ".java", ".kt", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".swift",
+}
+# A Rust char literal; any other ' starts a lifetime or label ('a, 'static).
+_RUST_CHAR = re.compile(r"'(?:\\(?:u\{[0-9A-Fa-f]{1,6}\}|x[0-9A-Fa-f]{2}|.)|[^\\'\r\n])'")
 
 
 @lru_cache(maxsize=64)
@@ -17,6 +27,8 @@ def views(text: str, path: str = "") -> tuple[str, str, tuple[tuple[int, int], .
     hashes = not suffix or suffix in {".py", ".rb", ".sh", ".yaml", ".yml", ".toml", ".php"}
     slashes = suffix not in {".py", ".rb", ".sh", ".yaml", ".yml", ".toml"}
     dashes = not suffix or suffix == ".sql"
+    line_strings = suffix in _LINE_STRINGS
+    rust = suffix == ".rs"
     comments, literals = [], []
     i = 0
     while i < len(text):
@@ -53,6 +65,8 @@ def views(text: str, path: str = "") -> tuple[str, str, tuple[tuple[int, int], .
                     break
                 i += 1
             literals.append((start, min(i, len(text))))
+        elif rust and text[i] == "'" and not _RUST_CHAR.match(text, i):
+            i += 1
         elif text[i] in "\"'`":
             quote = text[i]
             delimiter = quote * 3 if text.startswith(quote * 3, i) else quote
@@ -62,6 +76,8 @@ def views(text: str, path: str = "") -> tuple[str, str, tuple[tuple[int, int], .
                     i += 2
                 elif text.startswith(delimiter, i):
                     i += len(delimiter)
+                    break
+                elif line_strings and delimiter in "'\"" and text[i] in "\r\n":
                     break
                 else:
                     i += 1

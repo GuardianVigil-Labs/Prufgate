@@ -181,7 +181,10 @@ def _result(
         coverage["engines"] = list(engines.values())
     profile = "core+review" if tool == "prufgate_full_scan" else "core" if tool == "prufgate_fast_scan" else "review" if tool == "prufgate_review" else "engine"
     result = make_result(findings, root=ws, coverage=coverage, errors=[error] if error else [], incomplete=incomplete,
-                         profile=source["profile"] if source else profile, privacy=source["privacy"] if source else None)
+                         profile=source["profile"] if source else profile, privacy=source["privacy"] if source else None,
+                         # The CLI scan already applied policy and dismissals: never twice.
+                         enforcement=source.get("enforcement") if source else None,
+                         revision=source.get("revision") if source else None)
     if source and source.get("governance"):
         result["governance"] = source["governance"]
     blockers = result["summary"]["blockers"]

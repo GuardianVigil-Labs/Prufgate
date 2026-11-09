@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @unittest.skipIf(sys.platform == "win32", "the composite action requires a POSIX runner")
 class ActionExecution(unittest.TestCase):
-    def run_action(self, code=0, mode="native", fail="true", native=True, python_ok=True, scan_status="", allow_ai=False):
+    def run_action(self, code=0, mode="native", fail="true", native=True, python_ok=True, scan_status="", allow_ai=False,
+                   profile="battery"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools, action, workspace = root / "bin", root / "action", root / "workspace"
@@ -28,8 +29,9 @@ class ActionExecution(unittest.TestCase):
             status = 'case "$FIXTURE_EXIT" in 0) state=clean;; 1) state=findings;; *) state=error;; esac\n[ -z "$FIXTURE_STATUS" ] || state="$FIXTURE_STATUS"\nprintf "%s\\n" "$state" > "$FIXTURE_WORKSPACE/reports/prufgate-result.status"\n'
             (action / "prufgate.sh").write_text('#!/bin/sh\necho native >> "$FIXTURE_CALLED"\n' + status + 'exit "$FIXTURE_EXIT"\n')
             scripts = {
-                "docker": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FIXTURE_CALLED"\n' + status + 'exit "$FIXTURE_EXIT"\n',
-                "python3": '#!/bin/sh\nexit "$FIXTURE_PYTHON_EXIT"\n',
+                "docker": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FIXTURE_CALLED"\n' + status + 'echo "{}"\nexit "$FIXTURE_EXIT"\n',
+                # `python3 -I -c` is the dependency probe; any other call is a core scan.
+                "python3": '#!/bin/sh\n[ "$2" = -c ] && exit "$FIXTURE_PYTHON_EXIT"\n' + status + 'echo "{}"\nexit "$FIXTURE_EXIT"\n',
                 "git": "#!/bin/sh\nexit 0\n",
                 "gitleaks": "#!/bin/sh\nexit 0\n",
                 "zizmor": "#!/bin/sh\nexit 0\n",
@@ -44,7 +46,7 @@ class ActionExecution(unittest.TestCase):
                        PRUFGATE_EXECUTION=mode, FAIL_ON_BLOCKER=fail, PRUFGATE_BATTERY="fast",
                        PRUFGATE_IMAGE="example.com/prufgate:fixture", FIXTURE_EXIT=str(code),
                        FIXTURE_CALLED=str(called), FIXTURE_WORKSPACE=str(workspace), FIXTURE_PYTHON_EXIT="0" if python_ok else "1",
-                       FIXTURE_STATUS=scan_status, PRUFGATE_PROFILE="battery", ALLOW_EXTERNAL_AI="true" if allow_ai else "false")
+                       FIXTURE_STATUS=scan_status, PRUFGATE_PROFILE=profile, ALLOW_EXTERNAL_AI="true" if allow_ai else "false")
             proc = subprocess.run(["bash", str(ROOT / "scripts" / "run_action.sh")],
                                   capture_output=True, text=True, env=env, timeout=10)
             outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
@@ -81,6 +83,20 @@ class ActionExecution(unittest.TestCase):
         self.assertEqual(outputs["verdict"], "ERROR")
         self.assertEqual(called, "")
         self.assertFalse(stale)
+
+    def test_failed_core_scan_leaves_no_empty_sarif_to_upload(self):
+        for mode in ("native", "container"):
+            with self.subTest(mode=mode):
+                proc, outputs, _, sarif = self.run_action(code=2, mode=mode, profile="core")
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertFalse(sarif)
+
+    def test_completed_core_scan_keeps_its_sarif(self):
+        for mode in ("native", "container"):
+            with self.subTest(mode=mode):
+                proc, _, _, sarif = self.run_action(code=1, mode=mode, profile="core", scan_status="findings")
+                self.assertEqual(proc.returncode, 1, proc.stderr)
+                self.assertTrue(sarif)
 
     def test_invalid_mode_and_boolean_are_errors(self):
         for mode, fail in (("unknown", "false"), ("native", "no")):

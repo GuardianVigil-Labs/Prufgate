@@ -75,8 +75,8 @@ Or add the GitHub Action to a pull-request workflow, pinned to the commit SHA of
 ```yaml
 - uses: actions/checkout@<commit-sha>
   with: { fetch-depth: 0, persist-credentials: false }
+- run: python3 -m pip install "PyYAML>=6.0"
 - uses: GuardianVigil-Labs/Prufgate@<commit-sha-of-v1.3.0>
-  with: { execution: container }
 ```
 
 Every release is signed and carries build provenance and an SBOM: [Verify a release](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/SECURITY.md#verify-a-release).

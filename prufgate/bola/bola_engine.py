@@ -2007,7 +2007,7 @@ def run_dynamic_matrix(
 
     for template in cross:
         path_b = template.replace("{tenant_id}", tenant_b)
-        path_a = path_b.replace(tenant_b, tenant_a)
+        path_a = template.replace("{tenant_id}", tenant_a)
         public_a, public_b = request(path_a), request(path_b)
         own_a, own_b = request(path_a, token_a, tenant_a), request(path_b, token_b, tenant_b)
         own_data_a, own_data_b = payload(own_a), payload(own_b)

@@ -33,7 +33,11 @@ if str(_THIS_DIR.parent.parent) not in sys.path:
 
 from prufgate import __version__, inline_ignore  # noqa: E402
 from prufgate.anti_fabrication.literals import search_code  # noqa: E402
-from prufgate.bola.bola_engine import INTERNAL_SCANNER_PATHS, is_self_scan, is_test_path  # noqa: E402
+from prufgate.bola.bola_engine import (  # noqa: E402
+    INTERNAL_SCANNER_PATHS,
+    is_self_scan,
+    is_test_path,
+)
 from prufgate.config import ConfigError  # noqa: E402
 from prufgate.diff_guard.tamper_detector import scan_diff_for_tampering  # noqa: E402
 from prufgate.privacy import redact, redact_data  # noqa: E402

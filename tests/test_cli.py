@@ -136,6 +136,44 @@ class TestPrufGateCLI(unittest.TestCase):
             self.assertEqual(rev_items[0]["title"], "SQL Injection Vector")
 
 
+class ResultOut(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.ws = self.tmp / "real" / "ws"
+        self.ws.mkdir(parents=True)
+        (self.ws / "service.py").write_text("def total(items):\n    return sum(items)\n", encoding="utf-8")
+        (self.tmp / "link").symlink_to(self.tmp / "real")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def check(self, *args: str) -> int:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return cli_main(["check", *args])
+
+    def test_symlinked_parents_outside_the_workspace_are_followed(self) -> None:
+        rc = self.check(str(self.tmp / "link" / "ws"), "--result-out", str(self.tmp / "link" / "out" / "res.json"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads((self.tmp / "real" / "out" / "res.json").read_text())["scan_status"], "clean")
+
+    def test_symlink_inside_the_workspace_is_refused_with_exit_2(self) -> None:
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (self.ws / "reports").symlink_to(outside)
+        rc = self.check(str(self.ws), "--result-out", str(self.ws / "reports" / "res.json"))
+        self.assertEqual(rc, 2)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_unwritable_result_out_exits_2(self) -> None:
+        (self.tmp / "file").write_text("x")
+        for fmt in ("text", "result"):
+            self.assertEqual(self.check(str(self.ws), "--format", fmt, "--result-out", str(self.tmp / "file" / "res.json")), 2)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc = cli_main(["test-audit", str(self.ws), "--format", "result", "--result-out", str(self.tmp / "file" / "r.json")])
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 

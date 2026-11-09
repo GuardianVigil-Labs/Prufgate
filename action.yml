@@ -35,7 +35,7 @@ inputs:
     required: false
     default: 'auto'
   image:
-    description: 'Container image used in container mode. Select execution: container to force this image even when Python is installed.'
+    description: 'Container image used in container mode. The default is the signed release image of this version; an action pinned to an unreleased commit needs an image built from that commit.'
     required: false
     default: 'ghcr.io/guardianvigil-labs/prufgate:1.3.0'
   base_ref:

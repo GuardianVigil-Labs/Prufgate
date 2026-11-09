@@ -111,7 +111,9 @@ if [ "${MODE}" = native ]; then
   if [ "${SINGLE_ENGINE}" -eq 1 ]; then
     python3 -I "${ACTION_PATH}/prufgate/cli.py" "${CORE_ARGS[@]}"
   elif [ "${PROFILE}" = core ]; then
-    python3 -I "${ACTION_PATH}/prufgate/cli.py" "${CORE_ARGS[@]}" > "${GITHUB_WORKSPACE}/reports/prufgate.sarif"
+    CORE_OUTPUT="$(mktemp "${RUNNER_TEMP:-/tmp}/prufgate-output.XXXXXX")" || { finish 2; exit $?; }
+    trap 'rm -f "${CORE_OUTPUT}"' EXIT
+    python3 -I "${ACTION_PATH}/prufgate/cli.py" "${CORE_ARGS[@]}" > "${CORE_OUTPUT}"
   else
     WORKSPACE="${GITHUB_WORKSPACE}" bash "${ACTION_PATH}/prufgate.sh" "${PRUFGATE_BATTERY}"
   fi
@@ -131,8 +133,8 @@ else
     CONTAINER_ARGS=(python3 -I /tools/prufgate/prufgate/cli.py check /workspace --format sarif --result-out /workspace/reports/prufgate-result.json)
     case "${PRUFGATE_BATTERY}" in fast|check) CONTAINER_ARGS+=(--changed) ;; esac
   fi
-  CONTAINER_OUTPUT="$(mktemp "${RUNNER_TEMP:-/tmp}/prufgate-output.XXXXXX")" || { finish 2; exit $?; }
-  trap 'rm -f "${CONTAINER_OUTPUT}"' EXIT
+  CORE_OUTPUT="$(mktemp "${RUNNER_TEMP:-/tmp}/prufgate-output.XXXXXX")" || { finish 2; exit $?; }
+  trap 'rm -f "${CORE_OUTPUT}"' EXIT
   AI_ENV=()
   if [ "${PRUFGATE_ALLOW_EXTERNAL_AI}" = 1 ]; then
     AI_ENV=(-e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e OLLAMA_HOST -e OPENAI_BASE_URL -e PRUFGATE_AI_MODEL -e PRUFGATE_AI_PROVIDER)
@@ -148,12 +150,17 @@ else
     -e PRUFGATE_ALLOW_EXTERNAL_AI \
     -e GITHUB_BASE_REF="${GITHUB_BASE_REF:-}" -e CI=true \
     -v "${GITHUB_WORKSPACE}:/workspace" "${PRUFGATE_IMAGE}" "${CONTAINER_ARGS[@]}" \
-    > "${CONTAINER_OUTPUT}"
+    > "${CORE_OUTPUT}"
   EXIT_CODE=$?
-  if [ "${PROFILE}" = core ]; then
-    mv "${CONTAINER_OUTPUT}" "${GITHUB_WORKSPACE}/reports/prufgate.sarif"
+  [ "${PROFILE}" = core ] || cat "${CORE_OUTPUT}"
+fi
+# A core scan's SARIF is published only when the scan completed (exit 0 or 1)
+# and wrote one: an empty file would still be uploaded to code scanning.
+if [ "${PROFILE}" = core ]; then
+  if { [ "${EXIT_CODE}" -eq 0 ] || [ "${EXIT_CODE}" -eq 1 ]; } && [ -s "${CORE_OUTPUT}" ]; then
+    mv "${CORE_OUTPUT}" "${GITHUB_WORKSPACE}/reports/prufgate.sarif" || EXIT_CODE=2
   else
-    cat "${CONTAINER_OUTPUT}"
+    rm -f "${CORE_OUTPUT}"
   fi
 fi
 finish "${EXIT_CODE}"

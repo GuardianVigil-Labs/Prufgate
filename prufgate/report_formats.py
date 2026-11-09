@@ -48,7 +48,8 @@ def _findings(sarif: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "rule": str(r.get("ruleId") or "prufgate-finding"),
                     "severity": sev if sev in GITLAB_SEVERITY else "P2",
-                    "blocking": props.get("blocking", sev in BLOCKING),
+                    # Only a real boolean overrides the severity: "false" is not False.
+                    "blocking": props["blocking"] if isinstance(props.get("blocking"), bool) else sev in BLOCKING,
                     "message": str((r.get("message") or {}).get("text", "")),
                     "path": re.sub(r"^(?:\./)+", "", str(loc.get("artifactLocation", {}).get("uri", ""))) or "PRUFGATE_AUDIT_TARGET",
                     "line": max(1, int(loc.get("region", {}).get("startLine", 1) or 1)),

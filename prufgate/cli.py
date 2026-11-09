@@ -68,9 +68,14 @@ from prufgate.review import reviewer as rev_engine  # noqa: E402
 from prufgate.review.adjudicate import adjudicate as ai_adjudicate  # noqa: E402
 from prufgate.rules import SARIF_RANK, visible  # noqa: E402
 from prufgate.rules import confidence as rule_confidence  # noqa: E402
-from prufgate.safe_fs import safe_read_text, safe_write_text  # noqa: E402
+from prufgate.safe_fs import output_path, safe_read_text, safe_write_text  # noqa: E402
 from prufgate.sarif import add_partial_fingerprints  # noqa: E402
-from prufgate.scan_result import ai_privacy, attach_sarif, make_result, markdown_summary  # noqa: E402
+from prufgate.scan_result import (  # noqa: E402
+    ai_privacy,
+    attach_sarif,
+    make_result,
+    markdown_summary,
+)
 
 
 def run_all_self_checks() -> int:
@@ -657,15 +662,28 @@ def _stop_hook_active() -> bool:
     return isinstance(data, dict) and data.get("stop_hook_active") is True
 
 
+def _write_result_out(path: str | None, result: dict, workspace: Path) -> bool:
+    """Write --result-out and its .status file. False, and exit 2, when it cannot."""
+    if not path:
+        return True
+    try:
+        out = output_path(Path(path), workspace)
+        safe_write_text(out, json.dumps(result, indent=2))
+        safe_write_text(out.with_suffix(".status"), result["scan_status"] + "\n")
+    except OSError as exc:
+        print(f"prufgate: cannot write the result file ({exc.__class__.__name__}: {exc.strerror or exc})", file=sys.stderr)
+        return False
+    return True
+
+
 def _cmd_check(args: argparse.Namespace) -> int:
     target = Path(args.path).resolve()
     trace = scan_coverage.Coverage(target if target.is_dir() else target.parent, "changed" if args.changed else "workspace", args.base)
-    def write_result(result: dict) -> None:
-        if getattr(args, "result_out", None):
-            safe_write_text(Path(args.result_out), json.dumps(result, indent=2))
-            safe_write_text(Path(args.result_out).with_suffix(".status"), result["scan_status"] + "\n")
+    def write_result(result: dict) -> bool:
+        written = _write_result_out(getattr(args, "result_out", None), result, trace.root)
         if args.format == "result":
             print(json.dumps(result, indent=2))
+        return written
     def failure(message: str) -> int:
         result = make_result([], coverage=trace.to_dict(), errors=[message])
         from prufgate.workflow import revision
@@ -703,13 +721,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
     trace.step("pr-reviewer", "Use prufgate review or the battery profile for Engine 6.", skipped=True)
     for tool in ("gitleaks", "ast-grep", "zizmor"):
         trace.step(tool, "Not requested in the core profile; available through the shell battery.", skipped=True)
-    result = make_result(findings, root=trace.root, coverage=trace.to_dict(),
+    result = make_result(findings, root=trace.root, coverage=trace.to_dict(), config_path=args.config,
                          privacy=getattr(trace, "privacy", ai_privacy()), include_code=not getattr(args, "no_code", False))
     result["governance"]["baselined_findings"] = len(baselined)
     result["governance"]["inline_suppressions"] = honoured
     result["governance"]["inline_audit"] = getattr(trace, "inline_audit", [])
     result["governance"]["ai_dismissed_findings"] = len(dismissed)
-    write_result(result)
+    if not write_result(result):
+        return 2
     findings = result["findings"]
     blockers = [f for f in findings if f["blocking"]]
 
@@ -1093,11 +1112,9 @@ def _cmd_bola_result(args: argparse.Namespace) -> int:
                          errors=["BOLA checks could not complete; see diagnostics."] if code not in (0, 1) and not incomplete else [])
     if probe is not None:
         result["coverage"]["live_probe"] = probe
-    if getattr(args, "result_out", None):
-        safe_write_text(Path(args.result_out), json.dumps(result, indent=2))
-        safe_write_text(Path(args.result_out).with_suffix(".status"), result["scan_status"] + "\n")
+    written = _write_result_out(getattr(args, "result_out", None), result, Path(args.path).resolve())
     print(json.dumps(result, indent=2))
-    return result["exit_code"]
+    return result["exit_code"] if written else 2
 
 
 def _cmd_test_result(args: argparse.Namespace) -> int:
@@ -1116,11 +1133,9 @@ def _cmd_test_result(args: argparse.Namespace) -> int:
         except (Exception, SystemExit) as exc:
             items, error = [], [f"Test audit could not complete ({exc.__class__.__name__})."]
     result = make_result(items, root=trace.root, coverage=trace.to_dict(), profile="test-audit", errors=error)
-    if args.result_out:
-        safe_write_text(Path(args.result_out), json.dumps(result, indent=2))
-        safe_write_text(Path(args.result_out).with_suffix(".status"), result["scan_status"] + "\n")
+    written = _write_result_out(args.result_out, result, trace.root)
     print(json.dumps(result, indent=2))
-    return result["exit_code"]
+    return result["exit_code"] if written else 2
 
 
 def _cmd_fix(args: argparse.Namespace) -> int:

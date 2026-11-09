@@ -30,9 +30,10 @@ def revision(root: Path) -> dict:
         return {"commit": None, "dirty": None}
 
 
-def apply(items: list[dict], root: Path, ref: Optional[str]) -> tuple[list[dict], dict, dict, dict]:
+def apply(items: list[dict], root: Path, ref: Optional[str],
+          config_path: Optional[str] = None) -> tuple[list[dict], dict, dict, dict]:
     base = trusted_ref(root, ref)
-    cfg = PrufGateConfig.load(root, ref=base)
+    cfg = PrufGateConfig.load(root, config_path, ref=base)
     keys = fingerprints([(f["file"], f["rule"], f["line"]) for f in items], root)
     items = [{**item, "fingerprint": key[2]} for item, key in zip(items, keys)]
     items, governance = dismissals.apply(items, root, base)

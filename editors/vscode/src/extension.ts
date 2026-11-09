@@ -86,13 +86,14 @@ function check(folder: vscode.WorkspaceFolder): void {
       processes.delete(key);
       running.delete(key);
       state.running = false;
-      // Exit 1 means blocking findings and still prints JSON; anything else is an error.
+      // Exit 1 (blocking findings) and exit 2 (an error) print the versioned result.
+      // Without one (a timeout, a usage error, an older CLI) the CLI's message is the error.
       const code = err ? (err as { code?: unknown }).code : 0;
       if (!state.current(version)) {
         // An edit or workspace removal invalidated this scan while it ran.
       } else {
         try {
-          if (err && code !== 1 && code !== 2) throw new Error(err.killed ? "timed out" : (stderr.trim().split("\n").pop() || err.message));
+          if (err && (err.killed || (code !== 1 && code !== 2) || !stdout.trim())) throw new Error(err.killed ? "timed out" : (stderr.trim().split("\n").pop() || err.message));
           const result = parseResult(stdout, folder.uri.fsPath, code);
           state.coverage = result.coverage;
           if (result.scan_status === "incomplete" || result.scan_status === "error") {

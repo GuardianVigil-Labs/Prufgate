@@ -43,7 +43,12 @@ from prufgate.review.adjudicate import adjudicate  # noqa: E402
 from prufgate.rules import SARIF_RANK, confidence, visible  # noqa: E402
 from prufgate.safe_fs import safe_read_text, safe_write_text  # noqa: E402
 from prufgate.sarif import add_partial_fingerprints  # noqa: E402
-from prufgate.scan_result import ai_privacy, attach_sarif, make_result, markdown_summary  # noqa: E402
+from prufgate.scan_result import (  # noqa: E402
+    ai_privacy,
+    attach_sarif,
+    make_result,
+    markdown_summary,
+)
 
 # ANSI Color Codes
 RESET = "\033[0m"

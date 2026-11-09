@@ -32,6 +32,10 @@ case "${MODE}" in
 esac
 export WORKSPACE="${WORKSPACE:-$([ -d /workspace ] && [ -w /workspace ] && echo /workspace || pwd)}"
 cd "${WORKSPACE}" || exit 2
+# Links above the workspace (macOS /tmp, /home -> /var/home) are the operator's,
+# not the repository's: use the physical path so only links inside it are refused.
+LOGICAL_WORKSPACE="${WORKSPACE}"
+WORKSPACE="$(pwd -P)"
 
 # Delegate direct CLI subcommands (init, mcp, api, --self-check, --help) to prufgate/cli.py
 case "${MODE}" in
@@ -41,6 +45,12 @@ case "${MODE}" in
 esac
 
 REPORTS_DIR="${PRUFGATE_REPORTS_DIR:-${WORKSPACE}/reports}"
+case "${REPORTS_DIR}" in
+  "${WORKSPACE}"/*) ;;
+  "${LOGICAL_WORKSPACE}"/*) REPORTS_DIR="${WORKSPACE}/${REPORTS_DIR#"${LOGICAL_WORKSPACE}"/}" ;;
+  # An operator-chosen folder outside the workspace: use its parent's physical path.
+  /*) mkdir -p "${REPORTS_DIR%/*}" && REPORTS_DIR="$(cd "${REPORTS_DIR%/*}" && pwd -P)/${REPORTS_DIR##*/}" ;;
+esac
 RAW_DIR="${REPORTS_DIR}/raw"
 export PRUFGATE_REPORTS_DIR="${REPORTS_DIR}"
 export RAW_DIR

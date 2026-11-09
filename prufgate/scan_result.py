@@ -102,15 +102,19 @@ def enrich(item: dict, root: Optional[Path] = None, include_code: bool = True) -
 
 def make_result(findings: list[dict], *, root: Optional[Path] = None, coverage: Optional[dict] = None,
                 errors: Optional[list[str]] = None, incomplete: Optional[list[str]] = None,
-                privacy: Optional[dict] = None, profile: str = "core", include_code: bool = True, enforcement: Optional[dict] = None) -> dict:
+                privacy: Optional[dict] = None, profile: str = "core", include_code: bool = True, enforcement: Optional[dict] = None,
+                config_path: Optional[str] = None, revision: Optional[dict] = None) -> dict:
+    """Build the versioned result. With `root` and no `enforcement`, the trusted
+    policy and dismissals are applied once; a caller rebuilding a result from a
+    completed scan passes that scan's `enforcement` (and `revision`) instead."""
     items = [enrich(item, root, include_code) for item in findings]
     errors, incomplete = errors or [], incomplete or []
-    governance, revision = {}, {}
+    governance, revision = {}, revision or {}
     policy = enforcement or DEFAULT_ENFORCEMENT
     if root is not None and enforcement is None:
         from prufgate.workflow import apply as apply_workflow
         try:
-            items, policy, governance, revision = apply_workflow(items, root, (coverage or {}).get("base_ref"))
+            items, policy, governance, revision = apply_workflow(items, root, (coverage or {}).get("base_ref"), config_path)
             items = [enrich(item, root, include_code) for item in items]
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
             errors = [*errors, f"Workflow policy or dismissal ledger is invalid ({exc.__class__.__name__}): {exc}"]

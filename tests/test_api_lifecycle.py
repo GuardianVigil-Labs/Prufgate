@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import os
+import select
 import socket
 import subprocess
 import sys
@@ -163,6 +164,19 @@ class Retention(unittest.TestCase):
             self.assertFalse((reports / "scans" / "fixture").exists())
 
 
+def seconds_until_closed(conn: socket.socket, limit: float) -> float | None:
+    """Send one byte every 50 ms; the seconds until the server closed the connection, or None."""
+    start = time.monotonic()
+    while time.monotonic() - start < limit:
+        try:
+            conn.sendall(b"a")
+            if select.select([conn], [], [], 0.05)[0] and not conn.recv(4096):
+                return time.monotonic() - start
+        except (BrokenPipeError, ConnectionResetError):
+            return time.monotonic() - start
+    return None
+
+
 class HttpLimits(unittest.TestCase):
     @contextlib.contextmanager
     def serving(self):
@@ -212,17 +226,14 @@ class HttpLimits(unittest.TestCase):
                 self.fail("deadline did not release the connection slot")
 
     def test_slow_drip_cannot_extend_the_total_deadline(self):
-        with self.serving() as (address, _), socket.create_connection(address, timeout=1) as conn:
-            start = time.monotonic()
+        # One byte every 50 ms keeps resetting the 0.3 s per-read socket timeout:
+        # only the total deadline can close this connection.
+        with self.serving() as (address, accepted), socket.create_connection(address, timeout=1) as conn:
             conn.sendall(b"GET /api/v1/health HTTP/1.0\r\nX-Slow: ")
-            for _ in range(15):
-                try:
-                    conn.sendall(b"a")
-                except (BrokenPipeError, ConnectionResetError):
-                    self.assertLess(time.monotonic() - start, 0.8)
-                    break
-                time.sleep(0.05)
-            self.assertLess(time.monotonic() - start, 0.8)
+            self.assertTrue(accepted.wait(1))
+            closed_after = seconds_until_closed(conn, limit=3)
+            self.assertIsNotNone(closed_after, "a slow drip kept the connection open past the deadline")
+            self.assertLess(closed_after, 1.5)
 
 
 class CacheFallback(unittest.TestCase):

@@ -187,6 +187,47 @@ class Policies(unittest.TestCase):
                     self.assertEqual(server.SCANS["fixture"]["exit_code"], 0)
                     self.assertEqual(server.SCANS["fixture"]["summary"], result["summary"])
 
+    def test_pending_approval_is_reported_once_in_cli_mcp_and_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-q")
+            (root / "README.md").write_text("fixture\n")
+            commit(root)
+            (root / "app.py").write_text("def run():\n    raise NotImplementedError\n")
+            item = make_result([finding()], root=root)["findings"][0]
+            request = dismissals.append(root, "requested", "requester-role", "Intentional fixture behavior", finding=item, owner="owner-team")
+            dismissals.append(root, "approved", "reviewer-role", "Reviewed fixture exception", dismissal_id=request["id"])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cli.main(["check", tmp, "--changed", "--base", "HEAD", "--format", "result"])
+            result = validate_result(json.loads(out.getvalue()))
+            rules = [f["rule"] for f in result["findings"]]
+            self.assertEqual(rules.count("prufgate-config-self-exemption"), 1)
+            with patch.dict(os.environ, {"PRUFGATE_BASE_REF": "HEAD"}):
+                tool = mcp.prufgate_fast_scan(tmp, "HEAD")
+                self.assertEqual(tool["summary"], result["summary"])
+                self.assertEqual(tool["total_findings"], result["summary"]["total_findings"])
+                with patch.dict(server.SCANS, {"fixture": {"status": "queued", "profile": "core"}}, clear=True):
+                    server.execute_scan_worker("fixture", "fast", tmp, None)
+                    scan = server.SCANS["fixture"]
+                    self.assertEqual(scan["summary"], result["summary"])
+                    self.assertEqual(sum(scan["findings_summary"].values()), result["summary"]["total_findings"])
+
+    def test_check_config_file_sets_the_enforcement_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-q")
+            (root / "README.md").write_text("fixture\n")
+            commit(root)
+            (root / "app.py").write_text("def run():\n    raise NotImplementedError\n")
+            with tempfile.TemporaryDirectory() as other:
+                custom = Path(other) / "custom.yaml"
+                custom.write_text("enforcement:\n  mode: advisory\n")
+                for args, code in (([], 1), (["--config", str(custom)], 0)):
+                    with self.subTest(args=args), contextlib.redirect_stdout(io.StringIO()) as out:
+                        self.assertEqual(cli.main(["check", tmp, "--changed", "--base", "HEAD", "--format", "result", *args]), code)
+                    self.assertEqual(json.loads(out.getvalue())["enforcement"]["mode"], "advisory" if args else "strict")
+
     def test_summary_distinguishes_new_existing_and_unknown_debt(self):
         old = Report([Finding("rule", "P1", "app.py", 2, "old", "stable")])
         new = Report([Finding("rule", "P1", "app.py", 8, "moved", "stable"), Finding("new-rule", "P1", "other.py", 1, "new", "new")])

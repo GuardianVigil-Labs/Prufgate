@@ -120,6 +120,23 @@ class VersionsAgree(unittest.TestCase):
         # The MCP Registry verifies the PyPI package by this line in its README.
         self.assertIn(f"<!-- mcp-name: {server['name']} -->", (ROOT / "README.md").read_text(encoding="utf-8"))
 
+    def test_locked_requirements_cover_every_runtime_dependency(self):
+        # docs/UPGRADING.md installs a checkout with `--require-hashes -r requirements.txt` then `--no-deps .`.
+        deps = re.findall(r'^\s*"([A-Za-z0-9_.-]+)[^"]*"', (ROOT / "pyproject.toml").read_text().split("dependencies = [", 1)[1].split("]", 1)[0], re.M)
+        locked = {m.lower() for m in re.findall(r"^([A-Za-z0-9_.-]+)==", (ROOT / "requirements.txt").read_text(), re.M)}
+        self.assertEqual({d.lower() for d in deps} - locked, set())
+
+    def test_ci_guide_lists_every_action_input_with_its_default(self):
+        action = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))["inputs"]
+        guide = (ROOT / "docs/CI_INTEGRATION.md").read_text(encoding="utf-8")
+        table = guide.split("| Input | Default | Meaning |", 1)[1].split("\n\n", 1)[0]
+        rows = dict(re.findall(r"^\| `(\w+)` \| ([^|]+) \|", table, re.M))
+        self.assertEqual(set(rows), set(action))
+        for name, spec in action.items():
+            literal = re.fullmatch(r"`([^`]*)`", rows[name].strip())
+            if literal and "${{" not in spec["default"]:
+                self.assertEqual(literal.group(1), spec["default"], name)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from prufgate.privacy import redact, redact_data
-from prufgate.privacy import redact as _redact
 from prufgate.result_validation import read_json
 
 AI_REVIEW_SYSTEM_PROMPT = (
@@ -206,10 +205,10 @@ def _invoke_cli_agent(cli_name: str, prompt: str, timeout: int = 45) -> tuple[bo
                 check=False,
             )
         if proc.returncode != 0:
-            return False, _redact((proc.stderr or proc.stdout or f"{cli_name} exited with {proc.returncode}").strip())[:200]
+            return False, redact((proc.stderr or proc.stdout or f"{cli_name} exited with {proc.returncode}").strip())[:200]
         return True, proc.stdout
     except Exception as exc:
-        return False, _redact(str(exc))[:200]
+        return False, redact(str(exc))[:200]
 
 
 def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30, system: str = AI_REVIEW_SYSTEM_PROMPT) -> tuple[bool, str]:
@@ -305,9 +304,9 @@ def _invoke_http_llm(provider: str, prompt: str, timeout: int = 30, system: str 
 
         return False, f"Unsupported AI provider: {provider}"
     except urllib.error.URLError as exc:
-        return False, _redact(f"Network/HTTP error from {provider}: {exc}")[:300]
+        return False, redact(f"Network/HTTP error from {provider}: {exc}")[:300]
     except Exception as exc:
-        return False, _redact(str(exc))[:200]
+        return False, redact(str(exc))[:200]
 
 
 def review_diff_with_ai(

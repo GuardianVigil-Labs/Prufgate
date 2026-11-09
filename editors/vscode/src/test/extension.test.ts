@@ -73,6 +73,8 @@ test("a real extension callback keeps scan errors visible until a successful ret
   const h = host();
   h.callbacks.shift()!({ code: 2, message: "failure" }, "", "engine unavailable");
   assert.match(h.status.text, /scan error/);
+  assert.match(h.status.tooltip, /engine unavailable/);
+  assert.doesNotMatch(h.status.tooltip, /JSON/);
   assert.match(h.status.tooltip, /no successful scan/);
   h.events.check();
   assert.match(h.status.text, /scan error/);
@@ -88,6 +90,7 @@ test("old diagnostics are labelled stale after failure and edits invalidate in-f
   h.events.check();
   h.callbacks.shift()!({ code: 2, message: "timeout", killed: true }, "", "");
   assert.match(h.status.tooltip, /displayed findings are stale/);
+  assert.match(h.status.tooltip, /timed out/);
   assert.equal([...h.records.values()][0][0].source, "PrufGate (stale)");
   h.events.check();
   h.events.edit({ document: { uri: h.folder.uri } });

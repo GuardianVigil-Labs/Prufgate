@@ -34,6 +34,21 @@ def _absolute(path: Path) -> Path:
     return path
 
 
+def output_path(path: Path, workspace: Path) -> Path:
+    """Physical form of an operator-chosen output path.
+
+    Links above the workspace, or anywhere on a path outside it, belong to the
+    operator (macOS /tmp, /home -> /var/home) and are resolved. Components inside
+    the workspace are left for the writer, which still refuses links there.
+    """
+    path, workspace = Path(os.path.abspath(path)), Path(os.path.abspath(workspace))
+    real = workspace.resolve()
+    for base in (workspace, real):
+        if path.is_relative_to(base):
+            return real / path.relative_to(base)
+    return Path(os.path.realpath(path.parent)) / path.name
+
+
 @contextmanager
 def _parent(path: Path, create: bool = False) -> Iterator[tuple[Path, Optional[int]]]:
     path = _absolute(path)

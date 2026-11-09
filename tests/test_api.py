@@ -87,6 +87,26 @@ class ApiTest(unittest.TestCase):
         status, _, _ = self.request("GET", "/api/v1/health")
         self.assertEqual(status, 200)
 
+    def test_docs_page_loads_only_pinned_integrity_checked_assets(self):
+        import base64
+        import re
+
+        status, headers, body = self.request("GET", "/docs")
+        self.assertEqual(status, 200)
+        page = body.decode()
+        assets = re.findall(r'<(?:script|link)[^>]*(?:src|href)="(https://[^"]+)"[^>]*>', page)
+        self.assertEqual(len(assets), 2)
+        for tag in re.findall(r'<(?:script|link)[^>]*(?:src|href)="https://[^>]*>', page):
+            self.assertRegex(tag, r"swagger-ui-dist@\d+\.\d+\.\d+/")
+            self.assertRegex(tag, r'integrity="sha384-[A-Za-z0-9+/=]{64}"')
+            self.assertIn('crossorigin="anonymous"', tag)
+        csp = headers["Content-Security-Policy"]
+        inline = page.split("<script>", 1)[1].split("</script>", 1)[0]
+        digest = base64.b64encode(hashlib.sha256(inline.encode()).digest()).decode()
+        self.assertIn(f"'sha256-{digest}'", csp)
+        self.assertIn("default-src 'none'", csp)
+        self.assertNotIn("'unsafe-inline'", csp.split("script-src", 1)[1].split(";", 1)[0])
+
     def test_scan_requires_token(self):
         self.assertEqual(self.scan({"battery": "fast"}, token=None)[0], 401)
         self.assertEqual(self.scan({"battery": "fast"}, token="wrong")[0], 401)

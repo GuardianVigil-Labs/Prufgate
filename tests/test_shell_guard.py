@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import venv
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
@@ -17,16 +16,9 @@ from unittest.mock import patch
 from prufgate.cli import main as cli_main
 from prufgate.hooks.agent_hooks import SHELL_GUARD_COMMAND, init_workspace
 from prufgate.hooks.shell_guard import check_command, run_hook
+from tests.support import installed_python
 
 ROOT = Path(__file__).resolve().parent.parent
-
-def installed_python(root: Path) -> Path:
-    """An editable test installation in a venv, visible even under Python -I."""
-    venv.EnvBuilder(with_pip=False, system_site_packages=True).create(root)
-    site = root / ("Lib/site-packages" if sys.platform == "win32" else
-                   f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
-    (site / "prufgate-fixture.pth").write_text(str(ROOT) + "\n", encoding="utf-8")
-    return root / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
 
 BLOCKED = [

@@ -8,6 +8,7 @@ retrieving SARIF / Markdown reports, receiving CI webhooks, and browsing OpenAPI
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import hashlib
 import hmac
@@ -40,7 +41,12 @@ from prufgate.process import cli_command  # noqa: E402
 from prufgate.result_validation import read_json, validate_sarif  # noqa: E402
 from prufgate.rules import low_confidence_enabled, visible  # noqa: E402
 from prufgate.safe_fs import safe_read_text, safe_remove_tree, safe_write_text  # noqa: E402
-from prufgate.scan_result import make_result, metadata_from_sarif, redact_result, validate_result  # noqa: E402
+from prufgate.scan_result import (  # noqa: E402
+    make_result,
+    metadata_from_sarif,
+    redact_result,
+    validate_result,
+)
 
 # In-memory scan store and active subprocess map
 SCANS: Dict[str, Dict[str, Any]] = {}
@@ -389,7 +395,9 @@ def execute_scan_worker(scan_id: str, battery: str, workspace: str, target_url: 
     if metadata.get("scan_status") in ("error", "incomplete") and exit_code in (0, 1):
         issues.append("SARIF records an unsuccessful scan despite a successful exit code.")
     result = make_result(normalized, root=ws_path, coverage=metadata.get("coverage"), errors=issues,
-                         incomplete=incomplete, profile=metadata.get("profile", profile))
+                         incomplete=incomplete, profile=metadata.get("profile", profile),
+                         # The scan already applied policy and dismissals: never twice.
+                         enforcement=metadata.get("enforcement"), revision=metadata.get("revision"))
     if metadata.get("governance"):
         result["governance"] = metadata["governance"]
     exit_code = result["exit_code"]
@@ -596,7 +604,8 @@ SWAGGER_HTML = """<!DOCTYPE html>
   <title>PrufGate REST API Documentation</title>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css">
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css"
+        integrity="sha384-+yyzNgM3K92sROwsXxYCxaiLWxWJ0G+v/9A+qIZ2rgefKgkdcmJI+L601cqPD/Ut" crossorigin="anonymous">
   <style>
     body { margin: 0; background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     .swagger-ui .topbar { display: none; }
@@ -612,7 +621,8 @@ SWAGGER_HTML = """<!DOCTYPE html>
     <span class="badge">v{VERSION}</span>
   </div>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js"
+          integrity="sha384-qn5tagrAjZi8cSmvZ+k3zk4+eDEEUcP9myuR2J6V+/H6rne++v6ChO7EeHAEzqxQ" crossorigin="anonymous"></script>
   <script>
     window.onload = function() {
       window.ui = SwaggerUIBundle({
@@ -630,6 +640,16 @@ SWAGGER_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+# The page loads only the pinned, integrity-checked Swagger UI files and its own
+# inline start-up script (allowed by hash); the UI applies inline styles.
+_SWAGGER_SCRIPT = SWAGGER_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+SWAGGER_CSP = (
+    "default-src 'none'; "
+    "script-src https://unpkg.com 'sha256-"
+    + base64.b64encode(hashlib.sha256(_SWAGGER_SCRIPT.encode("utf-8")).digest()).decode("ascii") + "'; "
+    "style-src https://unpkg.com 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
 
 
 class PrufGateHTTPServer(ThreadingHTTPServer):
@@ -712,12 +732,16 @@ class PrufGateAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _send_text(self, status: int, text: str, content_type: str = "text/plain") -> None:
-        payload = redact(text).encode("utf-8")
+    def _send_text(self, status: int, text: str, content_type: str = "text/plain", csp: str = "") -> None:
+        # A page with its own CSP is this module's constant (integrity hashes would
+        # read as secrets); everything else may carry scan output and is redacted.
+        payload = (text if csp else redact(text)).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        if csp:
+            self.send_header("Content-Security-Policy", csp)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -770,7 +794,7 @@ class PrufGateAPIHandler(BaseHTTPRequestHandler):
             return
 
         if path in ("/docs", "/api"):
-            self._send_text(200, SWAGGER_HTML.replace("{VERSION}", __version__), content_type="text/html")
+            self._send_text(200, SWAGGER_HTML.replace("{VERSION}", __version__), content_type="text/html", csp=SWAGGER_CSP)
             return
 
         if path == "/api/v1/scans":
