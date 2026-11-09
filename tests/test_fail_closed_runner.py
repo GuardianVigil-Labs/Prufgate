@@ -8,16 +8,27 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import venv
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+def installed_python(root: Path) -> Path:
+    """An editable test installation in a venv, visible even under Python -I."""
+    venv.EnvBuilder(with_pip=False, system_site_packages=True).create(root)
+    site = root / ("Lib/site-packages" if sys.platform == "win32" else
+                   f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
+    (site / "prufgate-fixture.pth").write_text(str(ROOT) + "\n", encoding="utf-8")
+    return root / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
 
 from prufgate import cli  # noqa: E402
 from prufgate.config import ConfigError, PrufGateConfig, path_matches_pattern  # noqa: E402
@@ -411,13 +422,16 @@ class Hooks(unittest.TestCase):
     @unittest.skipUnless(shutil.which("sh"), "needs sh")
     @unittest.skipIf(sys.platform == "win32", "links a POSIX python3; test_shell_guard covers Windows' python")
     def test_hook_falls_back_to_the_module_without_prufgate_on_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as install:
             git(Path(tmp), "init", "-q")
             git(Path(tmp), "commit", "-q", "--allow-empty", "-m", "init")
             env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT), "HOME": tmp}
             fake = Path(tmp) / "bin"
             fake.mkdir()
-            (fake / "python3").symlink_to(sys.executable)
+            python = installed_python(Path(install) / "venv")
+            launcher = fake / "python3"
+            launcher.write_text("#!/bin/sh\nexec " + shlex.quote(str(python)) + ' "$@"\n')
+            launcher.chmod(0o755)
             env["PATH"] = f"{fake}:/usr/bin:/bin"
             proc = subprocess.run(["sh", "-c", HOOK_COMMAND], cwd=tmp, env=env, capture_output=True, text=True, input="{}")
             self.assertEqual(proc.returncode, 0, proc.stderr)

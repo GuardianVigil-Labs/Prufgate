@@ -240,7 +240,7 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(scan["verdict"], "ERROR")
 
     def test_report_is_counted(self):
-        sarif = {"runs": [{"results": [{"properties": {"severity": "P0"}}, {"properties": {"severity": "P2"}}]}]}
+        sarif = {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "fixture"}}, "results": [{"message": {"text": "blocker"}, "properties": {"severity": "P0"}}, {"message": {"text": "advisory"}, "properties": {"severity": "P2"}}]}]}
         scan = self.run_worker(json.dumps(sarif), exit_code=1)
         self.assertEqual(scan["blockers"], 1)
         self.assertEqual(scan["advisories"], 1)
@@ -283,7 +283,9 @@ class WorkerTest(unittest.TestCase):
             cmd, on_stdout = server.scan_command("fast", Path("/ws"))
         self.assertTrue(on_stdout)
         # The workspace as the OS spells it (`\\ws` on Windows).
-        self.assertEqual(cmd[1:5], ["-m", "prufgate.cli", "check", str(Path("/ws"))])
+        self.assertEqual(cmd[1], "-I")
+        self.assertTrue(cmd[2].endswith("cli.py"))
+        self.assertEqual(cmd[3:5], ["check", str(Path("/ws"))])
         self.assertIn("--changed", cmd)
         self.assertEqual(cmd[-2:], ["--format", "sarif"])
 

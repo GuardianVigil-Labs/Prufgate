@@ -15,7 +15,17 @@
     "vscode": "^1.100.0"
   },
   "categories": [
-    "Linters"
+    "Linters",
+    "Testing",
+    "AI"
+  ],
+  "keywords": [
+    "test honesty",
+    "code review",
+    "CI",
+    "devops",
+    "quality gate",
+    "AI code"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
@@ -71,7 +81,8 @@
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "test": "tsc -p . && node --test out/test/",
+    "test": "tsc -p . && node --test \"out/test/*.test.js\"",
+    "test:integration": "tsc -p . && node --test \"out/test/integration/*.test.js\"",
     "package": "vsce package --no-dependencies",
     "vscode:prepublish": "tsc -p . && node -e \"require('fs').copyFileSync('../../LICENSE', 'LICENSE')\"",
     "publish": "vsce publish --no-dependencies"

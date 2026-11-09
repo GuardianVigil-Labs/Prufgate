@@ -36,7 +36,7 @@ cd "${WORKSPACE}" || exit 2
 # Delegate direct CLI subcommands (init, mcp, api, --self-check, --help) to prufgate/cli.py
 case "${MODE}" in
   init|mcp|api|--self-check|--help|-h|help|--version)
-    exec python3 "${TOOL_ROOT}/prufgate/cli.py" "$@"
+    exec python3 -I "${TOOL_ROOT}/prufgate/cli.py" "$@"
     ;;
 esac
 
@@ -72,12 +72,12 @@ case "${MODE}" in
   bola)
     echo "🎯 Running Multi-Tenant BOLA / IDOR Engine..."
     shift || true
-    exec python3 "${TOOL_ROOT}/prufgate/cli.py" bola "$@"
+    exec python3 -I "${TOOL_ROOT}/prufgate/cli.py" bola "$@"
     ;;
   test-audit|test)
     echo "🧪 Running Test Integrity & Anti-Reward-Hacking Engine..."
     shift || true
-    exec python3 "${TOOL_ROOT}/prufgate/cli.py" test-audit "$@"
+    exec python3 -I "${TOOL_ROOT}/prufgate/cli.py" test-audit "$@"
     ;;
   *)
     echo "Unknown mode: ${MODE}"
@@ -87,7 +87,7 @@ case "${MODE}" in
 esac
 
 # Execute SARIF 2.1.0 & Markdown Report Synthesizer
-python3 "${TOOL_ROOT}/prufgate/synthesizer/parse_results.py"
+python3 -I "${TOOL_ROOT}/prufgate/synthesizer/parse_results.py"
 EXIT_CODE=$?
 
 END_TIME=$(date +%s)

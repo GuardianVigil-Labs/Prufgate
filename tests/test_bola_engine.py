@@ -50,11 +50,11 @@ class _BolaTestHttpHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             target_tenant = self.path.rsplit("/", 1)[-1]
-            if "token_alpha" in auth and target_tenant == "tenant-a-1111":
+            if ("token_alpha" in auth and target_tenant == "tenant-a-1111") or ("token_bravo" in auth and target_tenant == "tenant-b-2222"):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(b'{"order": "tenant-a-1111"}')
+                self.wfile.write(json.dumps({"order": target_tenant}).encode())
                 return
             self.send_response(403)
             self.end_headers()

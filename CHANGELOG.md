@@ -4,6 +4,24 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Added
+- Versioned scan results with consistent clean/findings/incomplete/error states, coverage, explainable findings, privacy metadata and effective blocking decisions across equivalent integration profiles.
+- Advisory and selected-rule enforcement, reviewed dismissal requests/approval/revocation with ownership, optional expiry and an auditable ledger, and owner/expiry metadata for reasoned inline ignores.
+- Opt-in GitHub Check Runs with changed-line annotations, coverage and next actions; PR summaries distinguish debt, incomplete checks and compatible previous-report comparisons.
+- Offline evaluation dashboards with explicit label denominators and provenance, a licensed 58-case upstream-derived corpus, Python reachable-return analysis and bounded cross-file impact review leads.
+- Public documentation index, user and developer guides, API/MCP references, upgrade guidance, support matrix and troubleshooting.
+
+### Changed
+- The GitHub Action supports explicit native/container selection, dependency validation and comparable core profiles. Execution errors remain fatal when findings are allowed.
+- External AI requires explicit operator consent in addition to trusted configuration. API, MCP, hooks and editor scans disable AI adjudication.
+- Editor diagnostics preserve scan-error and stale-result states; CI compiles, typechecks and tests the extension and its real-CLI integration.
+
+### Fixed
+- Invalid/missing engine output, unreadable inputs and incomplete verification cannot be interpreted as a clean pass. Scans use safe filesystem operations and isolated Git/process execution.
+- API cancellation/timeout lifecycle, process-registration races, connection deadlines, concurrency limits and bounded artifact retention/cleanup.
+- Read-only cache fallback, report privacy/redaction, integration response consistency, and process cleanup on procfs implementations without per-thread children files.
+- Source-literal handling, changed-line scope and contract/authorization analysis cases covered by regression fixtures.
+
 ## [1.3.0]
 
 ### Added
