@@ -194,7 +194,7 @@ def _result(
         "workspace": str(ws),
         "status": "error" if error or incomplete else "ok",
         "blockers": blockers,
-        "total_findings": len(findings),
+        "total_findings": result["summary"]["total_findings"],
         **extra,
     }
     if error:

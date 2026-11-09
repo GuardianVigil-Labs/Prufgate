@@ -38,14 +38,19 @@ def output_path(path: Path, workspace: Path) -> Path:
     """Physical form of an operator-chosen output path.
 
     Links above the workspace, or anywhere on a path outside it, belong to the
-    operator (macOS /tmp, /home -> /var/home) and are resolved. Components inside
-    the workspace are left for the writer, which still refuses links there.
+    operator (macOS /tmp, /home -> /var/home) and are resolved. From the first
+    directory that resolves into the workspace on, components are kept as
+    written, so the writer (which never follows links) refuses links there.
     """
-    path, workspace = Path(os.path.abspath(path)), Path(os.path.abspath(workspace))
-    real = workspace.resolve()
-    for base in (workspace, real):
-        if path.is_relative_to(base):
-            return real / path.relative_to(base)
+    if ".." in Path(path).parts:
+        raise OSError("refusing '..' in an output path")
+    path, real = Path(os.path.abspath(path)), Path(workspace).resolve()
+    if path.is_symlink():
+        raise OSError("refusing to write through a symlink")
+    for i in range(1, len(path.parts)):
+        prefix = Path(os.path.realpath(Path(*path.parts[:i])))
+        if prefix.is_relative_to(real):
+            return prefix.joinpath(*path.parts[i:])
     return Path(os.path.realpath(path.parent)) / path.name
 
 

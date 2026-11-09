@@ -45,6 +45,14 @@ case "${MODE}" in
 esac
 
 REPORTS_DIR="${PRUFGATE_REPORTS_DIR:-${WORKSPACE}/reports}"
+# A trailing slash makes `[ -L ]` follow a link, and `..` defeats the prefix
+# checks below: refuse both rather than guess.
+case "${REPORTS_DIR}" in
+  */|*/..|*/../*|..|../*)
+    echo "prufgate.sh: PRUFGATE_REPORTS_DIR must not end in '/' or contain '..': ${REPORTS_DIR}" >&2
+    exit 2
+    ;;
+esac
 case "${REPORTS_DIR}" in
   "${WORKSPACE}"/*) ;;
   "${LOGICAL_WORKSPACE}"/*) REPORTS_DIR="${WORKSPACE}/${REPORTS_DIR#"${LOGICAL_WORKSPACE}"/}" ;;

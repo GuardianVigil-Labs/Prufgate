@@ -165,6 +165,55 @@ class ResultOut(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_logical_prefix_cannot_follow_a_symlink_inside_the_workspace(self) -> None:
+        # The workspace is resolved; the output keeps the logical (symlinked) prefix.
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (self.ws / "reports").symlink_to(outside)
+        rc = self.check(str(self.tmp / "link" / "ws"), "--result-out", str(self.tmp / "link" / "ws" / "reports" / "res.json"))
+        self.assertEqual(rc, 2)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_logical_prefix_inside_the_workspace_still_writes(self) -> None:
+        rc = self.check(str(self.tmp / "link" / "ws"), "--result-out", str(self.tmp / "link" / "ws" / "out" / "res.json"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads((self.ws / "out" / "res.json").read_text())["scan_status"], "clean")
+
+    def test_dot_dot_in_result_out_is_refused(self) -> None:
+        rc = self.check(str(self.ws), "--result-out", str(self.ws / "sub" / ".." / ".." / "res.json"))
+        self.assertEqual(rc, 2)
+        self.assertFalse((self.tmp / "real" / "res.json").exists())
+
+    def test_final_component_symlink_is_refused(self) -> None:
+        victim = self.tmp / "victim.json"
+        victim.write_text("keep")
+        out = self.tmp / "out"
+        out.mkdir()
+        for name in ("res.json", "res.status"):
+            with self.subTest(name=name):
+                link = out / name
+                link.symlink_to(victim)
+                self.assertEqual(self.check(str(self.ws), "--result-out", str(out / "res.json")), 2)
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(victim.read_text(), "keep")
+                link.unlink()
+                for left in out.iterdir():
+                    left.unlink()
+
+    def test_failed_result_out_prints_no_passing_result(self) -> None:
+        (self.tmp / "file").write_text("x")
+        for argv in (["check", str(self.ws)], ["test-audit", str(self.ws)], ["bola", str(self.ws), "--static-only"]):
+            with self.subTest(command=argv[0]):
+                out = io.StringIO()
+                with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                    rc = cli_main([*argv, "--format", "result", "--result-out", str(self.tmp / "file" / "r.json")])
+                self.assertEqual(rc, 2)
+                text = out.getvalue()
+                if text.strip():
+                    printed = json.loads(text)
+                    self.assertEqual(printed["exit_code"], 2)
+                    self.assertFalse(printed["passed"])
+
     def test_unwritable_result_out_exits_2(self) -> None:
         (self.tmp / "file").write_text("x")
         for fmt in ("text", "result"):

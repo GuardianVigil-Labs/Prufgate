@@ -668,8 +668,9 @@ def _write_result_out(path: str | None, result: dict, workspace: Path) -> bool:
         return True
     try:
         out = output_path(Path(path), workspace)
+        status = output_path(Path(path).with_suffix(".status"), workspace)
         safe_write_text(out, json.dumps(result, indent=2))
-        safe_write_text(out.with_suffix(".status"), result["scan_status"] + "\n")
+        safe_write_text(status, result["scan_status"] + "\n")
     except OSError as exc:
         print(f"prufgate: cannot write the result file ({exc.__class__.__name__}: {exc.strerror or exc})", file=sys.stderr)
         return False
@@ -681,7 +682,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
     trace = scan_coverage.Coverage(target if target.is_dir() else target.parent, "changed" if args.changed else "workspace", args.base)
     def write_result(result: dict) -> bool:
         written = _write_result_out(getattr(args, "result_out", None), result, trace.root)
-        if args.format == "result":
+        # A result that could not be saved must not print as a pass.
+        if args.format == "result" and written:
             print(json.dumps(result, indent=2))
         return written
     def failure(message: str) -> int:
@@ -1109,12 +1111,14 @@ def _cmd_bola_result(args: argparse.Namespace) -> int:
     except (ValueError, KeyError):
         data, code = [], 2
     result = make_result(data, root=Path(args.path).resolve(), profile="bola", incomplete=incomplete, coverage={"base_ref": getattr(args, "_effective_base", args.base)},
-                         errors=["BOLA checks could not complete; see diagnostics."] if code not in (0, 1) and not incomplete else [])
+                         errors=["BOLA checks could not complete; see diagnostics."] if code not in (0, 1) and not incomplete else [],
+                         config_path=args.config)
     if probe is not None:
         result["coverage"]["live_probe"] = probe
-    written = _write_result_out(getattr(args, "result_out", None), result, Path(args.path).resolve())
+    if not _write_result_out(getattr(args, "result_out", None), result, Path(args.path).resolve()):
+        return 2
     print(json.dumps(result, indent=2))
-    return result["exit_code"] if written else 2
+    return result["exit_code"]
 
 
 def _cmd_test_result(args: argparse.Namespace) -> int:
@@ -1132,10 +1136,12 @@ def _cmd_test_result(args: argparse.Namespace) -> int:
                 raise ValueError("Test audit did not complete.")
         except (Exception, SystemExit) as exc:
             items, error = [], [f"Test audit could not complete ({exc.__class__.__name__})."]
-    result = make_result(items, root=trace.root, coverage=trace.to_dict(), profile="test-audit", errors=error)
-    written = _write_result_out(args.result_out, result, trace.root)
+    result = make_result(items, root=trace.root, coverage=trace.to_dict(), profile="test-audit", errors=error,
+                         config_path=args.config)
+    if not _write_result_out(args.result_out, result, trace.root):
+        return 2
     print(json.dumps(result, indent=2))
-    return result["exit_code"] if written else 2
+    return result["exit_code"]
 
 
 def _cmd_fix(args: argparse.Namespace) -> int:

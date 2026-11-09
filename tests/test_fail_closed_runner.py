@@ -243,6 +243,20 @@ class Gate(unittest.TestCase):
             self.assertEqual(proc.returncode, 2)
             self.assertTrue(keep.exists())
 
+    def test_reports_dir_with_a_trailing_slash_or_dot_dot_is_refused(self):
+        # `[ -L dir/ ]` follows the link, so a trailing slash bypassed the symlink refusal.
+        with tempfile.TemporaryDirectory() as outside:
+            keep = Path(outside) / "raw" / "keep.txt"
+            keep.parent.mkdir()
+            keep.write_text("keep")
+            (self.ws / "reports").symlink_to(outside)
+            for value in (f"{self.ws}/reports/", f"{self.ws}/x/../reports"):
+                with self.subTest(value=value):
+                    proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": value})
+                    self.assertEqual(proc.returncode, 2)
+                    self.assertIn("PRUFGATE_REPORTS_DIR", proc.stderr)
+                    self.assertTrue(keep.exists())
+
     def test_workspace_must_exist(self):
         self.assertEqual(run_gate(self.ws, "fast", str(self.ws / "nope")).returncode, 2)
 

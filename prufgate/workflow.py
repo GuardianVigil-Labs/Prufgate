@@ -37,7 +37,10 @@ def apply(items: list[dict], root: Path, ref: Optional[str],
     keys = fingerprints([(f["file"], f["rule"], f["line"]) for f in items], root)
     items = [{**item, "fingerprint": key[2]} for item, key in zip(items, keys)]
     items, governance = dismissals.apply(items, root, base)
-    if governance["pending_changes"]:
+    # A repository-level finding: once per result, even when a merged scan
+    # (the MCP full scan) passes findings that already carry it.
+    if governance["pending_changes"] and not any(i["rule"] == "prufgate-config-self-exemption" and i.get("engine") == "workflow"
+                                                 for i in items):
         events, _ = dismissals.load(root)
         if any(event["action"] == "approved" for event in events[len(governance["audit"]):]):
             items.append({"rule": "prufgate-config-self-exemption", "engine": "workflow", "severity": "P1", "confidence": "high",
