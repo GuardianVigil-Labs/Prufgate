@@ -45,11 +45,11 @@ case "${MODE}" in
 esac
 
 REPORTS_DIR="${PRUFGATE_REPORTS_DIR:-${WORKSPACE}/reports}"
-# A trailing slash makes `[ -L ]` follow a link, and `..` defeats the prefix
-# checks below: refuse both rather than guess.
+# A trailing slash or a `.` component makes `[ -L ]` miss a link, and `..`
+# defeats the prefix checks below: refuse all three rather than guess.
 case "${REPORTS_DIR}" in
-  */|*/..|*/../*|..|../*)
-    echo "prufgate.sh: PRUFGATE_REPORTS_DIR must not end in '/' or contain '..': ${REPORTS_DIR}" >&2
+  */|*/.|*/./*|.|./*|*/..|*/../*|..|../*)
+    echo "prufgate.sh: PRUFGATE_REPORTS_DIR must not end in '/' or contain '.' or '..': ${REPORTS_DIR}" >&2
     exit 2
     ;;
 esac
@@ -68,6 +68,23 @@ if [ -L "${REPORTS_DIR}" ] || [ -L "${RAW_DIR}" ]; then
   echo "prufgate.sh: ${REPORTS_DIR} or ${RAW_DIR} is a symlink; refusing to use it" >&2
   exit 2
 fi
+# A symlinked parent inside the workspace leads out of it just the same.
+case "${REPORTS_DIR}" in
+  "${WORKSPACE}"/*) _rest="${REPORTS_DIR#"${WORKSPACE}"/}" ;;
+  /*) _rest="" ;;
+  *) _rest="${REPORTS_DIR}" ;;  # relative to the workspace, the current directory
+esac
+_path="${WORKSPACE}"
+while [ -n "${_rest}" ]; do
+  _part="${_rest%%/*}"
+  case "${_rest}" in */*) _rest="${_rest#*/}" ;; *) _rest="" ;; esac
+  [ -n "${_part}" ] || continue
+  _path="${_path}/${_part}"
+  if [ -L "${_path}" ]; then
+    echo "prufgate.sh: ${REPORTS_DIR} passes through the symlink ${_path}; refusing to use it" >&2
+    exit 2
+  fi
+done
 mkdir -p "${RAW_DIR}"
 rm -rf "${RAW_DIR:?}"/* 2>/dev/null || true
 

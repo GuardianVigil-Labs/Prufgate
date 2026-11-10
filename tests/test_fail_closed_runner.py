@@ -257,6 +257,26 @@ class Gate(unittest.TestCase):
                     self.assertIn("PRUFGATE_REPORTS_DIR", proc.stderr)
                     self.assertTrue(keep.exists())
 
+    def test_reports_dir_through_a_workspace_symlink_is_refused(self):
+        # `[ -L reports/. ]` does not see the link, and a link in a parent directory
+        # was never checked: both wrote reports outside the workspace.
+        (self.ws / "nested").mkdir()
+        for link, value in (("reports", "reports/."), ("nested/out", "nested/out/reports")):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as outside:
+                keep = Path(outside) / "raw" / "keep.txt"
+                keep.parent.mkdir()
+                keep.write_text("keep")
+                (Path(outside) / "reports" / "raw").mkdir(parents=True)
+                before = sorted(p.relative_to(outside) for p in Path(outside).rglob("*"))
+                (self.ws / link).symlink_to(outside)
+                try:
+                    proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": f"{self.ws}/{value}"})
+                finally:
+                    (self.ws / link).unlink()
+                self.assertEqual(proc.returncode, 2)
+                self.assertTrue(keep.exists())
+                self.assertEqual(sorted(p.relative_to(outside) for p in Path(outside).rglob("*")), before)
+
     def test_workspace_must_exist(self):
         self.assertEqual(run_gate(self.ws, "fast", str(self.ws / "nope")).returncode, 2)
 
