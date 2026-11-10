@@ -77,8 +77,13 @@ def redact(text: str, secrets: Iterable[str] = ()) -> str:
 
 
 def redact_path(text: str, secrets: Iterable[str] = ()) -> str:
-    """Redact a file path or URL: every rule of `redact`, with long runs judged per path segment."""
-    return _redact_fragment(text, tuple(secrets), _LONG_SEGMENT)
+    """Redact a file path or URL: long runs are judged per segment in the path only.
+
+    A query string or fragment gets the full `redact` rules, so a base64 key with "/" there is removed.
+    """
+    values = tuple(secrets)
+    cut = min((i for i in (text.find("?"), text.find("#")) if i >= 0), default=len(text))
+    return _redact_fragment(text[:cut], values, _LONG_SEGMENT) + redact(text[cut:], values)
 
 
 def redact_data(value: Any, secrets: Iterable[str] = ()) -> Any:

@@ -278,6 +278,22 @@ class PrivacyBoundary(unittest.TestCase):
         # Free text keeps the stricter rule: a base64 key with slashes is still one key.
         self.assertNotIn("K7MDENG", redact("key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1"))
 
+    def test_url_query_and_fragment_keep_the_full_secret_rules(self):
+        # Invented: every segment is short, but the run across "/" is 48 characters.
+        token = "Fx7q/" * 9 + "Fx7"
+        for url in (f"https://api.example.com/v1/items?sig={token}", f"https://app.example.com/cb#{token}",
+                    f"/v1/items?sig={token}"):
+            with self.subTest(url=url):
+                finding = parse_results.Finding("e", "r1", "P1", "m", url, 1)
+                self.assertNotIn(token, finding.file_path)
+                self.assertTrue(finding.file_path.startswith(url.split("?")[0].split("#")[0]))
+                self.assertNotIn(token, bola_engine.BolaFinding("r", "P1", "m", url).endpoint_or_file)
+                with tempfile.TemporaryDirectory() as tmp:
+                    sarif = parse_results.generate_sarif([finding], Path(tmp) / "out.sarif")
+                self.assertNotIn(token, json.dumps(sarif))
+        self.assertNotIn("invented-pass", parse_results.Finding(
+            "e", "r1", "P1", "m", "https://user:invented-pass@db.example.com/x?a=1", 1).file_path)
+
     def test_live_bola_does_not_store_response_bodies(self):
         class Response:
             status = 200
