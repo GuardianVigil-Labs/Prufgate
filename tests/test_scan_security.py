@@ -25,10 +25,11 @@ from prufgate.config import PrufGateConfig
 from prufgate.hooks import adapters
 from prufgate.hooks.agent_hooks import guard_command
 from prufgate.mcp import prufgate_mcp_server as mcp
-from prufgate.privacy import redact
+from prufgate.privacy import redact, redact_data
 from prufgate.process import git_command
 from prufgate.review import ai_adapter, reviewer
 from prufgate.safe_fs import safe_read_text, safe_write_text
+from prufgate.sarif import line_hashes
 from prufgate.synthesizer import parse_results
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -263,18 +264,39 @@ class PrivacyBoundary(unittest.TestCase):
         self.assertEqual(redact(ordinary), ordinary)
         self.assertNotIn("invented-private-value", redact('api_key = "invented-private-value"'))
 
-    def test_deep_file_paths_survive_redaction_and_long_segments_do_not(self):
-        # Shaped like a macOS temporary folder: one run of 40+ characters across slashes.
-        deep = "/var/folders/zz/q1w2e3r4t5y6u7i8o9p0_a0000gn/T/tmp9x8y7z6w/src/app.py"
-        token = "Fx7q" * 12  # invented, 48 characters
-        finding = parse_results.Finding("e", "r1", "P1", "m", deep, 2)
-        self.assertEqual(finding.file_path, deep)
+    def test_deep_workspace_paths_are_reported_relative_with_stable_fingerprints(self):
+        source = "def handler(request):\n    return lookup(request.args['t'])\n"
         with tempfile.TemporaryDirectory() as tmp:
-            sarif = parse_results.generate_sarif([finding], Path(tmp) / "out.sarif")
-        result = sarif["runs"][0]["results"][0]
-        self.assertEqual(result["properties"]["rawTarget"], deep)
-        self.assertEqual(result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], deep.lstrip("/"))
-        self.assertNotIn(token, parse_results.Finding("e", "r1", "P1", "m", f"/api/reset/{token}", 1).file_path)
+            # Shaped like a macOS temporary folder: one run of 40+ characters across slashes.
+            workspace = Path(tmp, "var", "folders", "zz", "q1w2e3r4t5y6u7i8o9p0_a0000gn", "T", "tmp9x8y7z6w")
+            (workspace / "src").mkdir(parents=True)
+            (workspace / "src" / "app.py").write_text(source, encoding="utf-8")
+            deep = str(workspace / "src" / "app.py")
+            self.assertNotEqual(redact(deep), deep)  # the full rules would mangle the absolute form
+            finding = parse_results.Finding("e", "r1", "P1", "m", deep, 2)
+            self.assertEqual(finding.workspace_file_path(workspace), "src/app.py")
+            runs = []
+            for prefix in ("", "import os\n\n"):
+                (workspace / "src" / "app.py").write_text(prefix + source, encoding="utf-8")
+                shifted = parse_results.Finding("e", "r1", "P1", "m", deep, 2 + prefix.count("\n"))
+                runs.append(parse_results.generate_sarif([shifted], workspace / "out.sarif", workspace)["runs"][0]["results"][0])
+        for result in runs:
+            self.assertEqual(result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "src/app.py")
+            self.assertEqual(result["properties"]["rawTarget"], "src/app.py")
+        self.assertEqual(runs[0]["partialFingerprints"]["primaryLocationLineHash"], line_hashes(source)[2])
+        self.assertEqual(runs[0]["partialFingerprints"], runs[1]["partialFingerprints"])
+
+    def test_long_token_path_outside_the_workspace_is_still_redacted(self):
+        token = "Fx7q" * 12  # invented, 48 characters
+        with tempfile.TemporaryDirectory() as tmp:
+            for value in (f"/api/reset/{token}", f"/srv/other/{token}/app.py"):
+                with self.subTest(value=value):
+                    finding = parse_results.Finding("e", "r1", "P1", "m", value, 1)
+                    self.assertNotIn(token, finding.file_path)
+                    self.assertNotIn(token, finding.workspace_file_path(Path(tmp)))
+                    sarif = parse_results.generate_sarif([finding], Path(tmp) / "out.sarif", Path(tmp))
+                    self.assertNotIn(token, json.dumps(sarif))
+                    self.assertNotIn(token, bola_engine.BolaFinding("r", "P1", "m", value).endpoint_or_file)
         # Free text keeps the stricter rule: a base64 key with slashes is still one key.
         self.assertNotIn("K7MDENG", redact("key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1"))
 
@@ -293,6 +315,29 @@ class PrivacyBoundary(unittest.TestCase):
                 self.assertNotIn(token, json.dumps(sarif))
         self.assertNotIn("invented-pass", parse_results.Finding(
             "e", "r1", "P1", "m", "https://user:invented-pass@db.example.com/x?a=1", 1).file_path)
+
+    def test_slash_question_and_hash_secrets_are_redacted_everywhere(self):
+        token = "Fx7q/" * 9 + "Fx7"  # invented, short segments joined by "/"
+        known = "Qz9x?Wv8y#Ut7s"  # invented secret value holding "?" and "#"
+        values = (f"https://api.example.com/reset/{token}", f"/v1/reset/{token}/confirm",
+                  f"https://app.example.com/p/{known}", f"/cb?{known}", f"/cb#{known}", f"note {known} and {token}")
+        with patch.dict(os.environ, {"PRUFGATE_INVENTED_TOKEN": known}), tempfile.TemporaryDirectory() as tmp:
+            for value in values:
+                with self.subTest(value=value):
+                    self.assertNotIn("Fx7q/Fx7q", redact(value))
+                    self.assertNotIn(known, redact(value))
+                    finding = parse_results.Finding("e", "r1", "P1", "m", value, 1)
+                    self.assertNotIn("Fx7q/Fx7q", finding.file_path)
+                    self.assertNotIn(known, finding.file_path)
+                    endpoint = bola_engine.BolaFinding("r", "P1", "m", value).endpoint_or_file
+                    self.assertNotIn("Fx7q/Fx7q", endpoint)
+                    self.assertNotIn(known, endpoint)
+                    sarif = json.dumps(parse_results.generate_sarif([finding], Path(tmp) / "out.sarif", Path(tmp)))
+                    self.assertNotIn("Fx7q/Fx7q", sarif)
+                    self.assertNotIn(known, sarif)
+                    data = json.dumps(redact_data({"uri": value, "rawTarget": value, "file": value, "file_path": value}))
+                    self.assertNotIn("Fx7q/Fx7q", data)
+                    self.assertNotIn(known, data)
 
     def test_live_bola_does_not_store_response_bodies(self):
         class Response:

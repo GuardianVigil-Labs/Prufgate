@@ -35,7 +35,7 @@ from prufgate.config import (  # noqa: E402
 )
 from prufgate.console import utf8_output  # noqa: E402
 from prufgate.coverage import merge as merge_coverage  # noqa: E402
-from prufgate.privacy import redact, redact_data, redact_path  # noqa: E402
+from prufgate.privacy import redact, redact_data  # noqa: E402
 from prufgate.process import git_command  # noqa: E402
 from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.result_validation import read_json, validate_findings  # noqa: E402
@@ -81,7 +81,7 @@ class Finding:
         self.rule_id = rule_id
         self.severity = severity
         self.message = redact(message.strip().replace("\n", " "))
-        self.file_path = redact_path(file_path)
+        self.file_path = file_path
         self.line = line
         self.details = redact(details.strip())
         # Line ranges the finding covers, for the changed-lines scope (diff_scope).
@@ -89,6 +89,22 @@ class Finding:
         # Already limited to the change by the runner (gitleaks over the PR's commits).
         self.anchored = anchored
         self.blocking = severity in ("P0", "P1") if blocking is None else blocking
+
+    @property
+    def file_path(self) -> str:
+        """The reported path, always through the full secret rules."""
+        return redact(self._file_path)
+
+    @file_path.setter
+    def file_path(self, value: str) -> None:
+        self._file_path = value
+
+    def workspace_file_path(self, workspace_dir: Optional[Path]) -> str:
+        """The reported path relative to the workspace when it lies inside it, then redacted.
+
+        Relative before redacting: a deep absolute checkout path (a macOS temporary folder)
+        reads as one long opaque token to the secret rules."""
+        return redact(workspace_relative_path(self._file_path, workspace_dir))
 
     @property
     def confidence(self) -> str:
@@ -648,6 +664,27 @@ def load_execution_manifest(raw_dir: Path) -> Dict[str, Dict[str, Any]]:
     return manifest
 
 
+def workspace_relative_path(file_path: str, workspace_dir: Optional[Path]) -> str:
+    """`file_path` relative to `workspace_dir` when it lies inside it, else unchanged."""
+    if not workspace_dir:
+        return file_path
+    raw = file_path.replace("\\", "/")
+    # The workspace and an absolute finding path may name the same folder through a symlink
+    # (macOS: /var -> /private/var), so both spellings of each are compared.
+    prefixes = {str(p).replace("\\", "/").rstrip("/") + "/" for p in (workspace_dir, workspace_dir.resolve())}
+    spellings = [raw]
+    if os.path.isabs(raw):
+        try:
+            spellings.append(str(Path(raw).resolve()).replace("\\", "/"))
+        except (OSError, RuntimeError):
+            pass
+    for spelled in spellings:
+        prefix = next((p for p in prefixes if spelled.startswith(p)), None)
+        if prefix:
+            return spelled[len(prefix) :]
+    return file_path
+
+
 def _normalize_sarif_uri(file_path: str, workspace_dir: Optional[Path] = None) -> str:
     """Normalize artifact URI for strict GitHub Code Scanning SARIF 2.1.0 compatibility."""
     raw = (file_path or "").strip()
@@ -655,22 +692,7 @@ def _normalize_sarif_uri(file_path: str, workspace_dir: Optional[Path] = None) -
         return "PRUFGATE_AUDIT_TARGET"
     if raw.startswith(("http://", "https://")):
         return "PRUFGATE_DYNAMIC_TARGET"
-    raw = raw.replace("\\", "/")
-    if workspace_dir:
-        # The workspace and an absolute finding path may name the same folder through a symlink
-        # (macOS: /var -> /private/var), so both spellings of each are compared.
-        prefixes = {str(p).replace("\\", "/").rstrip("/") + "/" for p in (workspace_dir, workspace_dir.resolve())}
-        spellings = [raw]
-        if os.path.isabs(raw):
-            try:
-                spellings.append(str(Path(raw).resolve()).replace("\\", "/"))
-            except (OSError, RuntimeError):
-                pass
-        for spelled in spellings:
-            prefix = next((p for p in prefixes if spelled.startswith(p)), None)
-            if prefix:
-                raw = spelled[len(prefix) :]
-                break
+    raw = workspace_relative_path(raw.replace("\\", "/"), workspace_dir)
     raw = re.sub(r"^(?:/workspace/|\./|/)+", "", raw)
     return raw or "PRUFGATE_AUDIT_TARGET"
 
@@ -723,7 +745,8 @@ def generate_sarif(
         if f.severity == "P3":
             level = "note"
 
-        norm_uri = _normalize_sarif_uri(f.file_path, workspace_dir)
+        location = f.workspace_file_path(workspace_dir)
+        norm_uri = _normalize_sarif_uri(location, workspace_dir)
 
         result: Dict[str, Any] = {
             "ruleId": f.rule_id,
@@ -743,7 +766,7 @@ def generate_sarif(
                 "tool": f.tool,
                 "severity": f.severity,
                 "confidence": f.confidence,
-                "rawTarget": f.file_path,
+                "rawTarget": location,
                 "details": f.details,
             },
         }
@@ -1075,6 +1098,8 @@ def _main() -> None:
     enable_low = cfg.enable_low_confidence
 
     findings = parse_raw_results(raw_dir)
+    for f in findings:
+        f.file_path = f.workspace_file_path(workspace_dir)
     try:
         ranges = diff_scope.load(raw_dir / CHANGED_LINES_FILE)
     except (OSError, ValueError, TypeError) as e:

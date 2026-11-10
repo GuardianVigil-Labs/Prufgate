@@ -40,7 +40,7 @@ from prufgate.bola.bola_engine import (  # noqa: E402
 )
 from prufgate.config import ConfigError  # noqa: E402
 from prufgate.diff_guard.tamper_detector import scan_diff_for_tampering  # noqa: E402
-from prufgate.privacy import redact, redact_data, redact_path  # noqa: E402
+from prufgate.privacy import redact, redact_data  # noqa: E402
 from prufgate.process import git_command  # noqa: E402
 from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.review.ai_adapter import review_diff_with_ai  # noqa: E402
@@ -738,7 +738,7 @@ def _main(argv: list[str] | None = None) -> int:
     for comment in comments:
         comment.message = redact(comment.message)
         comment.title = redact(comment.title)
-        comment.file_path = redact_path(comment.file_path)
+        comment.file_path = redact(comment.file_path)
         if comment.suggestion:
             comment.suggestion = redact(comment.suggestion)
 

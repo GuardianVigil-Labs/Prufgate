@@ -52,7 +52,7 @@ from prufgate.anti_reward_hacking.test_integrity import (  # noqa: E402
 )
 from prufgate.config import ConfigError, PrufGateConfig, rules_match  # noqa: E402
 from prufgate.netguard import target_url_error  # noqa: E402
-from prufgate.privacy import redact, redact_path  # noqa: E402
+from prufgate.privacy import redact  # noqa: E402
 from prufgate.rules import visible  # noqa: E402
 from prufgate.safe_fs import safe_read_text, safe_write_text  # noqa: E402
 
@@ -74,7 +74,7 @@ class BolaFinding:
         self.rule_id = rule_id
         self.severity = severity
         self.message = redact(message)
-        self.endpoint_or_file = redact_path(endpoint_or_file)
+        self.endpoint_or_file = redact(endpoint_or_file)
         self.line = line
         self.curl_poc = redact(curl_poc)
         self.details = redact(details)

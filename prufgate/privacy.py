@@ -31,13 +31,8 @@ _SECRET_PATTERNS = (
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"\bA[KS]IA[0-9A-Z]{16}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    re.compile(r"\b(?=[A-Za-z+/_-]*[0-9])[A-Za-z0-9+/_-]{40,}={0,2}"),  # a long identifier is not a key
 )
-# A long opaque run is treated as a key. Base64 keys contain "/", so in free text the run may
-# span slashes; in a file path each segment is judged alone, or every deep path (macOS
-# /var/folders/..., CI checkouts) would read as one 40-character "key".
-_LONG_TOKEN = re.compile(r"\b(?=[A-Za-z+/_-]*[0-9])[A-Za-z0-9+/_-]{40,}={0,2}")
-_LONG_SEGMENT = re.compile(r"\b(?=[A-Za-z+_-]*[0-9])[A-Za-z0-9+_-]{40,}={0,2}")
-_PATH_KEYS = frozenset({"file", "file_path", "uri", "rawTarget"})
 _SECRET_ASSIGN_RE = re.compile(
     r"(?i)((?:secret|token|passw(?:or)?d|pwd|api[_-]?key|private[_-]?key|credential|auth)[A-Za-z0-9_]*"
     r"[\"']?\s*[:=]\s*[\"'])([^\"'\n]{4,})([\"'])"
@@ -53,13 +48,13 @@ def _redact_known(text: str) -> str:
     return text
 
 
-def _redact_fragment(text: str, secrets: Iterable[str], long_token: re.Pattern = _LONG_TOKEN) -> str:
+def _redact_fragment(text: str, secrets: Iterable[str]) -> str:
     """Remove known environment secrets, token shapes and credential assignments."""
     for value in sorted({v for v in secrets if v}, key=len, reverse=True):
         text = text.replace(value, "[redacted]")
     text = _redact_known(text)
     text = _SECRET_ASSIGN_RE.sub(r"\1[redacted]\3", text)
-    for pattern in (*_SECRET_PATTERNS, long_token):
+    for pattern in _SECRET_PATTERNS:
         text = pattern.sub("[redacted]", text)
     return text
 
@@ -76,16 +71,6 @@ def redact(text: str, secrets: Iterable[str] = ()) -> str:
     return "".join(part if i % 2 else _redact_fragment(part, values) for i, part in enumerate(parts))
 
 
-def redact_path(text: str, secrets: Iterable[str] = ()) -> str:
-    """Redact a file path or URL: long runs are judged per segment in the path only.
-
-    A query string or fragment gets the full `redact` rules, so a base64 key with "/" there is removed.
-    """
-    values = tuple(secrets)
-    cut = min((i for i in (text.find("?"), text.find("#")) if i >= 0), default=len(text))
-    return _redact_fragment(text[:cut], values, _LONG_SEGMENT) + redact(text[cut:], values)
-
-
 def redact_data(value: Any, secrets: Iterable[str] = ()) -> Any:
     """Redact string values without changing a report's structure or field names."""
     if isinstance(value, str):
@@ -93,6 +78,5 @@ def redact_data(value: Any, secrets: Iterable[str] = ()) -> Any:
     if isinstance(value, list):
         return [redact_data(item, secrets) for item in value]
     if isinstance(value, dict):
-        return {key: redact_path(item, secrets) if key in _PATH_KEYS and isinstance(item, str)
-                else redact_data(item, secrets) for key, item in value.items()}
+        return {key: redact_data(item, secrets) for key, item in value.items()}
     return value
