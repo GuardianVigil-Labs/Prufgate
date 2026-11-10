@@ -34,7 +34,6 @@ export WORKSPACE="${WORKSPACE:-$([ -d /workspace ] && [ -w /workspace ] && echo 
 cd "${WORKSPACE}" || exit 2
 # Links above the workspace (macOS /tmp, /home -> /var/home) are the operator's,
 # not the repository's: use the physical path so only links inside it are refused.
-LOGICAL_WORKSPACE="${WORKSPACE}"
 WORKSPACE="$(pwd -P)"
 
 # Delegate direct CLI subcommands (init, mcp, api, --self-check, --help) to prufgate/cli.py
@@ -44,48 +43,46 @@ case "${MODE}" in
     ;;
 esac
 
-REPORTS_DIR="${PRUFGATE_REPORTS_DIR:-${WORKSPACE}/reports}"
-# A trailing slash or a `.` component makes `[ -L ]` miss a link, and `..`
-# defeats the prefix checks below: refuse all three rather than guess.
-case "${REPORTS_DIR}" in
-  */|*/.|*/./*|.|./*|*/..|*/../*|..|../*)
-    echo "prufgate.sh: PRUFGATE_REPORTS_DIR must not end in '/' or contain '.' or '..': ${REPORTS_DIR}" >&2
-    exit 2
-    ;;
-esac
-case "${REPORTS_DIR}" in
-  "${WORKSPACE}"/*) ;;
-  "${LOGICAL_WORKSPACE}"/*) REPORTS_DIR="${WORKSPACE}/${REPORTS_DIR#"${LOGICAL_WORKSPACE}"/}" ;;
-  # An operator-chosen folder outside the workspace: use its parent's physical path.
-  /*) mkdir -p "${REPORTS_DIR%/*}" && REPORTS_DIR="$(cd "${REPORTS_DIR%/*}" && pwd -P)/${REPORTS_DIR##*/}" ;;
+DEFAULT_REPORTS_DIR="${WORKSPACE}/reports"
+REPORTS_DIR="${PRUFGATE_REPORTS_DIR:-${DEFAULT_REPORTS_DIR}}"
+# Decide on where the folder really is, never on how its path is spelled:
+# follow each existing component to its physical path, then append the rest.
+# reports/ may sit inside the scanned repository, and a committed symlink there
+# must not make PrufGate delete or overwrite files elsewhere, so no component
+# inside the workspace may be a symlink.
+refuse_reports_dir() { echo "prufgate.sh: PRUFGATE_REPORTS_DIR $1: ${REPORTS_DIR}" >&2; exit 2; }
+case "${REPORTS_DIR}" in /*) _phys="" ;; *) _phys="${WORKSPACE}" ;; esac
+_rest="${REPORTS_DIR}"
+_tail=""
+while [ -n "${_rest}" ]; do
+  _part="${_rest%%/*}"
+  case "${_rest}" in */*) _rest="${_rest#*/}" ;; *) _rest="" ;; esac
+  case "${_part}" in ""|.) continue ;; ..) refuse_reports_dir "must not contain '..'" ;; esac
+  _next="${_phys}/${_part}"
+  if [ -n "${_tail}" ] || { [ ! -e "${_next}" ] && [ ! -L "${_next}" ]; }; then
+    _tail="${_tail}/${_part}"
+  elif [ -L "${_next}" ] && case "${_phys}/" in "${WORKSPACE}"/*) true ;; *) false ;; esac; then
+    refuse_reports_dir "passes through the workspace symlink ${_next}"
+  elif [ -d "${_next}" ]; then
+    _phys="$(cd -P "${_next}" && pwd -P)" || exit 2
+    _phys="${_phys%/}"
+  else
+    refuse_reports_dir "passes through ${_next}, which is not a directory"
+  fi
+done
+REPORTS_DIR="${_phys}${_tail}"
+# Inside the workspace only the default folder is allowed; anywhere else is the operator's choice.
+case "${REPORTS_DIR}/" in
+  "${WORKSPACE}"/*) [ "${REPORTS_DIR}" = "${DEFAULT_REPORTS_DIR}" ] || refuse_reports_dir "inside the workspace must be ${DEFAULT_REPORTS_DIR}" ;;
 esac
 RAW_DIR="${REPORTS_DIR}/raw"
 export PRUFGATE_REPORTS_DIR="${REPORTS_DIR}"
 export RAW_DIR
-# reports/ sits inside the scanned repository: a committed symlink there must
-# not make PrufGate delete or overwrite files elsewhere.
-if [ -L "${REPORTS_DIR}" ] || [ -L "${RAW_DIR}" ]; then
-  echo "prufgate.sh: ${REPORTS_DIR} or ${RAW_DIR} is a symlink; refusing to use it" >&2
+if [ -L "${RAW_DIR}" ]; then
+  echo "prufgate.sh: ${RAW_DIR} is a symlink; refusing to use it" >&2
   exit 2
 fi
-# A symlinked parent inside the workspace leads out of it just the same.
-case "${REPORTS_DIR}" in
-  "${WORKSPACE}"/*) _rest="${REPORTS_DIR#"${WORKSPACE}"/}" ;;
-  /*) _rest="" ;;
-  *) _rest="${REPORTS_DIR}" ;;  # relative to the workspace, the current directory
-esac
-_path="${WORKSPACE}"
-while [ -n "${_rest}" ]; do
-  _part="${_rest%%/*}"
-  case "${_rest}" in */*) _rest="${_rest#*/}" ;; *) _rest="" ;; esac
-  [ -n "${_part}" ] || continue
-  _path="${_path}/${_part}"
-  if [ -L "${_path}" ]; then
-    echo "prufgate.sh: ${REPORTS_DIR} passes through the symlink ${_path}; refusing to use it" >&2
-    exit 2
-  fi
-done
-mkdir -p "${RAW_DIR}"
+mkdir -p "${RAW_DIR}" || exit 2
 rm -rf "${RAW_DIR:?}"/* 2>/dev/null || true
 
 START_TIME=$(date +%s)

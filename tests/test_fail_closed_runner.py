@@ -261,7 +261,9 @@ class Gate(unittest.TestCase):
         # `[ -L reports/. ]` does not see the link, and a link in a parent directory
         # was never checked: both wrote reports outside the workspace.
         (self.ws / "nested").mkdir()
-        for link, value in (("reports", "reports/."), ("nested/out", "nested/out/reports")):
+        for link, value in (("reports", f"{self.ws}/reports/."), ("nested/out", f"{self.ws}/nested/out/reports"),
+                            # A doubled leading slash once skipped the symlink walk.
+                            ("nested/out", f"/{self.ws}/nested/out/reports"), ("reports", "reports/.")):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as outside:
                 keep = Path(outside) / "raw" / "keep.txt"
                 keep.parent.mkdir()
@@ -270,12 +272,45 @@ class Gate(unittest.TestCase):
                 before = sorted(p.relative_to(outside) for p in Path(outside).rglob("*"))
                 (self.ws / link).symlink_to(outside)
                 try:
-                    proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": f"{self.ws}/{value}"})
+                    proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": value})
                 finally:
                     (self.ws / link).unlink()
                 self.assertEqual(proc.returncode, 2)
                 self.assertTrue(keep.exists())
                 self.assertEqual(sorted(p.relative_to(outside) for p in Path(outside).rglob("*")), before)
+
+    def test_reports_dir_inside_the_workspace_must_be_the_default(self):
+        for value in (f"{self.ws}/out", f"{self.ws}/reports/sub", "out", str(self.ws)):
+            with self.subTest(value=value):
+                proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": value})
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("must be", proc.stderr)
+                self.assertFalse((self.ws / "out").exists())
+
+    def test_default_reports_dir_spelled_otherwise_is_used(self):
+        for value in (f"{self.ws}/reports", f"/{self.ws}/reports/", "reports"):
+            with self.subTest(value=value):
+                proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": value})
+                self.assertEqual(proc.returncode, 1, proc.stdout[-2000:] + proc.stderr[-2000:])
+                self.assertTrue((self.ws / "reports" / "prufgate.sarif").stat().st_size > 0)
+
+    def test_reports_dir_outside_the_workspace_is_used(self):
+        with tempfile.TemporaryDirectory() as outside:
+            reports = Path(outside) / "a" / "reports"
+            proc = run_gate(self.ws, "fast", str(self.ws), env={"PRUFGATE_REPORTS_DIR": str(reports)})
+            self.assertEqual(proc.returncode, 1, proc.stdout[-2000:] + proc.stderr[-2000:])
+            self.assertTrue((reports / "prufgate.sarif").stat().st_size > 0)
+            self.assertFalse((self.ws / "reports").exists())
+
+    def test_symlinked_raw_dir_is_refused(self):
+        with tempfile.TemporaryDirectory() as outside:
+            keep = Path(outside) / "keep.txt"
+            keep.write_text("keep")
+            (self.ws / "reports").mkdir()
+            (self.ws / "reports" / "raw").symlink_to(outside)
+            proc = run_gate(self.ws, "fast", str(self.ws))
+            self.assertEqual(proc.returncode, 2)
+            self.assertTrue(keep.exists())
 
     def test_workspace_must_exist(self):
         self.assertEqual(run_gate(self.ws, "fast", str(self.ws / "nope")).returncode, 2)
