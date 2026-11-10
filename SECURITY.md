@@ -73,7 +73,7 @@ External AI also requires explicit invocation consent: `review --ai`, `check --a
 
 ## Verify a release
 
-Every release is built by `.github/workflows/release.yml` from a `v*` tag, with no long-lived credentials: PyPI receives the packages through Trusted Publishing, and the container image is signed keyless with Sigstore. The wheel, the sdist, the zipapp and the image carry SLSA build provenance; the wheel and the image carry an SBOM. Replace `1.0.0` with the version you install.
+Every release is built by `.github/workflows/release.yml` from a `v*` tag. The only stored credential is the Visual Studio Marketplace token (`VSCE_PAT`, held in an approval environment); PyPI receives the packages through Trusted Publishing, and the container image is signed keyless with Sigstore. The wheel, the sdist, the zipapp, the VS Code extension and the image carry SLSA build provenance; the wheel and the image carry an SBOM. Replace `1.0.0` with the version you install.
 
 **The wheel and sdist.** The files on PyPI are the same files as on the GitHub release, so their SHA-256 matches `SHA256SUMS` (pip checks it when you pin `--hash=sha256:...` in a requirements file used with `--require-hashes`).
 
@@ -96,6 +96,8 @@ gh attestation verify prufgate.pyz --repo GuardianVigil-Labs/Prufgate
 gh attestation verify prufgate.pyz --repo GuardianVigil-Labs/Prufgate --bundle prufgate.pyz.intoto.jsonl   # offline
 python3 prufgate.pyz --version
 ```
+
+**The VS Code extension** (releases after 1.3.0): `prufgate-<version>.vsix` on the GitHub release is the file published to the Visual Studio Marketplace, listed in `SHA256SUMS` and attested like the wheel: `gh attestation verify prufgate-<version>.vsix --repo GuardianVigil-Labs/Prufgate`, then `code --install-extension prufgate-<version>.vsix`.
 
 PyPI also shows the Trusted Publishing provenance of each file (the "Verified details" and "Provenance" sections of the project page).
 

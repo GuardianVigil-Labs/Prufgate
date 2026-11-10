@@ -15,6 +15,7 @@ All notable changes to PrufGate. The format follows [Keep a Changelog](https://k
 - The GitHub Action supports explicit native/container selection, dependency validation and comparable core profiles. Execution errors remain fatal when findings are allowed.
 - External AI requires explicit operator consent in addition to trusted configuration. API, MCP, hooks and editor scans disable AI adjudication.
 - Editor diagnostics preserve scan-error and stale-result states; CI compiles, typechecks and tests the extension and its real-CLI integration.
+- Version tags also build, attest and attach the VS Code extension `.vsix` to the GitHub release and publish it to the Visual Studio Marketplace (environment `vscode-marketplace`).
 
 ### Fixed
 - Invalid/missing engine output, unreadable inputs and incomplete verification cannot be interpreted as a clean pass. Scans use safe filesystem operations and isolated Git/process execution.

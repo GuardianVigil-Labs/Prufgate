@@ -23,7 +23,7 @@ npm run package
 code --install-extension prufgate-<version>.vsix
 ```
 
-Maintainers publish a release with `npm run publish` (it builds the extension first).
+Releases are published from version tags by the release workflow; `CONTRIBUTING.md` has the one-time setup.
 
 ## Use
 

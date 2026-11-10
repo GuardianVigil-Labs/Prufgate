@@ -103,8 +103,29 @@ class ReleaseSafety(unittest.TestCase):
 
     def test_jobs_get_least_privilege(self):
         self.assertEqual(self.release["permissions"], {})
-        for name in ("checks", "build"):
+        for name in ("checks", "build", "vscode", "marketplace"):
             self.assertEqual(self.jobs[name]["permissions"], {"contents": "read"}, name)
+
+    def test_the_marketplace_publishes_the_checked_vsix_behind_its_environment(self):
+        build, publish = self.jobs["vscode"], self.jobs["marketplace"]
+        self.assertEqual(build["needs"], "checks")
+        self.assertEqual(publish["needs"], "vscode")
+        self.assertEqual(publish["environment"]["name"], "vscode-marketplace")
+        runs = "\n".join(st.get("run", "") for st in build["steps"])
+        self.assertIn('= "${TAG}"', runs)  # the version must equal the tag
+        self.assertIn("vsce package --no-dependencies", runs)
+        step = next(st for st in publish["steps"] if "vsce publish" in st.get("run", ""))
+        self.assertIn("--packagePath", step["run"])
+        self.assertIn('if [ -z "${VSCE_PAT}" ]', step["run"])  # a missing token fails, never skips
+        self.assertEqual(step["env"]["VSCE_PAT"], "${{ secrets.VSCE_PAT }}")
+        # The token is in no other job, and every checkout drops its credentials.
+        for name, job in self.jobs.items():
+            if name != "marketplace":
+                self.assertNotIn("VSCE_PAT", yaml.safe_dump(job), name)
+            for st in job["steps"]:
+                if "actions/checkout" in st.get("uses", ""):
+                    self.assertIs(st["with"]["persist-credentials"], False, name)
+        self.assertIn("vscode", self.jobs["release"]["needs"])
 
 
 class VersionsAgree(unittest.TestCase):
