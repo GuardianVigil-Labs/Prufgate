@@ -35,7 +35,7 @@ from prufgate.config import (  # noqa: E402
 )
 from prufgate.console import utf8_output  # noqa: E402
 from prufgate.coverage import merge as merge_coverage  # noqa: E402
-from prufgate.privacy import redact, redact_data  # noqa: E402
+from prufgate.privacy import redact, redact_data, redact_path  # noqa: E402
 from prufgate.process import git_command  # noqa: E402
 from prufgate.report_formats import gitlab_code_quality, junit_xml  # noqa: E402
 from prufgate.result_validation import read_json, validate_findings  # noqa: E402
@@ -81,7 +81,7 @@ class Finding:
         self.rule_id = rule_id
         self.severity = severity
         self.message = redact(message.strip().replace("\n", " "))
-        self.file_path = redact(file_path)
+        self.file_path = redact_path(file_path)
         self.line = line
         self.details = redact(details.strip())
         # Line ranges the finding covers, for the changed-lines scope (diff_scope).

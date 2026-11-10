@@ -45,6 +45,7 @@ def repository(root: Path) -> None:
 
 
 class ExecutionBoundary(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "the shell gate (prufgate.sh, runners/) needs a POSIX shell: on Windows use prufgate check, WSL or the container")
     @unittest.skipUnless(shutil.which("bash"), "shell runner needs bash")
     def test_manifest_helper_ignores_workspace_modules_and_pythonpath(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -261,6 +262,21 @@ class PrivacyBoundary(unittest.TestCase):
         ordinary = "const total = subtotal + tax;"
         self.assertEqual(redact(ordinary), ordinary)
         self.assertNotIn("invented-private-value", redact('api_key = "invented-private-value"'))
+
+    def test_deep_file_paths_survive_redaction_and_long_segments_do_not(self):
+        # Shaped like a macOS temporary folder: one run of 40+ characters across slashes.
+        deep = "/var/folders/zz/q1w2e3r4t5y6u7i8o9p0_a0000gn/T/tmp9x8y7z6w/src/app.py"
+        token = "Fx7q" * 12  # invented, 48 characters
+        finding = parse_results.Finding("e", "r1", "P1", "m", deep, 2)
+        self.assertEqual(finding.file_path, deep)
+        with tempfile.TemporaryDirectory() as tmp:
+            sarif = parse_results.generate_sarif([finding], Path(tmp) / "out.sarif")
+        result = sarif["runs"][0]["results"][0]
+        self.assertEqual(result["properties"]["rawTarget"], deep)
+        self.assertEqual(result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], deep.lstrip("/"))
+        self.assertNotIn(token, parse_results.Finding("e", "r1", "P1", "m", f"/api/reset/{token}", 1).file_path)
+        # Free text keeps the stricter rule: a base64 key with slashes is still one key.
+        self.assertNotIn("K7MDENG", redact("key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1"))
 
     def test_live_bola_does_not_store_response_bodies(self):
         class Response:
