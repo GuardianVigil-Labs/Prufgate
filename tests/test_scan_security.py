@@ -267,8 +267,9 @@ class PrivacyBoundary(unittest.TestCase):
     def test_deep_workspace_paths_are_reported_relative_with_stable_fingerprints(self):
         source = "def handler(request):\n    return lookup(request.args['t'])\n"
         with tempfile.TemporaryDirectory() as tmp:
-            # Shaped like a macOS temporary folder: one run of 40+ characters across slashes.
-            workspace = Path(tmp, "var", "folders", "zz", "q1w2e3r4t5y6u7i8o9p0_a0000gn", "T", "tmp9x8y7z6w")
+            # One segment is itself a long opaque token (invented), so the full rules redact the
+            # absolute path on every OS, whatever the separator.
+            workspace = Path(tmp, "var", "folders", "zz", "Fx7q" * 11, "T", "tmp9x8y7z6w")
             (workspace / "src").mkdir(parents=True)
             (workspace / "src" / "app.py").write_text(source, encoding="utf-8")
             deep = str(workspace / "src" / "app.py")
@@ -288,10 +289,12 @@ class PrivacyBoundary(unittest.TestCase):
 
     def test_deep_workspace_findings_in_different_files_are_not_merged(self):
         with tempfile.TemporaryDirectory() as tmp:
-            workspace = Path(tmp, "var", "folders", "zz", "q1w2e3r4t5y6u7i8o9p0_a0000gn", "T", "tmp9x8y7z6w")
+            workspace = Path(tmp, "var", "folders", "zz", "Fx7q" * 11, "T", "tmp9x8y7z6w")
             raw = workspace / "reports" / "raw"
             raw.mkdir(parents=True)
-            alpha, beta = str(workspace / "src" / "alpha.py"), str(workspace / "src" / "beta.py")
+            # Forward slashes, as scanners report them on every OS: the token run then spans the
+            # whole path up to the file name, so the redacted forms collide on Windows too.
+            alpha, beta = (workspace / "src" / "alpha.py").as_posix(), (workspace / "src" / "beta.py").as_posix()
             self.assertEqual(redact(alpha), redact(beta))  # the redacted display value cannot tell them apart
             (raw / "anti_fabrication.json").write_text(json.dumps([
                 {"rule": "unimplemented-production-stub", "file": path, "line": 4, "text": "x"} for path in (alpha, beta)
