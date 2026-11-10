@@ -1,6 +1,6 @@
 # Installation and upgrading
 
-Documentation in this checkout includes unreleased behavior. The published package/image tagged `1.3.0` remains that release's implementation. An unchanged version string in a development checkout does not make it equivalent to a published artifact.
+Documentation in this checkout includes unreleased behavior. The published package/image tagged `1.4.0` remains that release's implementation. An unchanged version string in a development checkout does not make it equivalent to a published artifact.
 
 ## Choose an implementation
 

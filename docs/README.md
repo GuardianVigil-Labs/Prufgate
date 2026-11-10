@@ -2,7 +2,7 @@
 
 PrufGate checks production behavior, test integrity, review guardrails and selected contract and authorization patterns. Results describe the scope that completed; a clean scan is not proof that a change is correct or secure.
 
-This documentation describes the current checkout. Options in the **Unreleased** changelog may not exist in the published 1.3.0 package or image. Follow [installation and upgrades](UPGRADING.md) when using the checkout's features, and keep CLI, Action and container implementations aligned.
+This documentation describes the current checkout. Options in the **Unreleased** changelog may not exist in the published 1.4.0 package or image. Follow [installation and upgrades](UPGRADING.md) when using the checkout's features, and keep CLI, Action and container implementations aligned.
 
 ## Start here
 

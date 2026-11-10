@@ -42,7 +42,7 @@ PrufGate uses pattern and structure heuristics, not a full parser for every lang
 
 PrufGate needs Python 3.9 or newer and Git.
 
-The [documentation home](docs/README.md) covers this checkout. For unreleased options, install/build a reviewed checkout and keep CLI, Action and image implementations aligned; see [installation and upgrading](docs/UPGRADING.md). Published `1.3.0` artifacts retain that release's behavior.
+The [documentation home](docs/README.md) covers this checkout. For unreleased options, install/build a reviewed checkout and keep CLI, Action and image implementations aligned; see [installation and upgrading](docs/UPGRADING.md). Published `1.4.0` artifacts retain that release's behavior.
 
 ```bash
 pipx install prufgate     # or: pip install prufgate  (the `prufgate` and `prufgate-mcp` commands)
@@ -66,17 +66,17 @@ The hooks that `prufgate init --hooks` writes call `prufgate` on `PATH`, so for 
 Or run the signed container image, which adds the full gate with ast-grep, gitleaks and zizmor:
 
 ```bash
-docker run --rm -v "$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:1.3.0          # the fast gate on this repository
-docker run --rm -v "$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:1.3.0 prufgate check .
+docker run --rm -v "$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:1.4.0          # the fast gate on this repository
+docker run --rm -v "$PWD:/workspace" ghcr.io/guardianvigil-labs/prufgate:1.4.0 prufgate check .
 ```
 
-Or add the GitHub Action to a pull-request workflow, pinned to the commit SHA of the `v1.3.0` tag ([full example](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CI_INTEGRATION.md)):
+Or add the GitHub Action to a pull-request workflow, pinned to the commit SHA of the `v1.4.0` tag ([full example](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/docs/CI_INTEGRATION.md)):
 
 ```yaml
 - uses: actions/checkout@<commit-sha>
   with: { fetch-depth: 0, persist-credentials: false }
 - run: python3 -m pip install "PyYAML>=6.0"
-- uses: GuardianVigil-Labs/Prufgate@<commit-sha-of-v1.3.0>
+- uses: GuardianVigil-Labs/Prufgate@<commit-sha-of-v1.4.0>
 ```
 
 Every release is signed and carries build provenance and an SBOM: [Verify a release](https://github.com/GuardianVigil-Labs/Prufgate/blob/main/SECURITY.md#verify-a-release).
@@ -86,7 +86,7 @@ Or add it to your [pre-commit](https://pre-commit.com) configuration, `.pre-comm
 ```yaml
 repos:
   - repo: https://github.com/GuardianVigil-Labs/Prufgate
-    rev: v1.3.0
+    rev: v1.4.0
     hooks:
       - id: prufgate          # changed files, on every commit
       - id: prufgate-full     # whole repository, before a push (pre-commit install --hook-type pre-push)

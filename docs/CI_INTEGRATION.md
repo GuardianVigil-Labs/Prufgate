@@ -42,7 +42,7 @@ jobs:
 | `fail_on_blocker` | `true` | Fail on blocking findings. With `false`, findings remain FAILED but do not fail the step. Execution errors always fail the step with ERROR. |
 | `sarif_upload` | `true` | Upload `reports/prufgate.sarif` to code scanning (skipped when no report was written). |
 | `execution` | `auto` | `native` validates the runner's dependencies; `container` always uses `image`; `auto` selects native only when all required dependencies are present, otherwise container. |
-| `image` | `ghcr.io/guardianvigil-labs/prufgate:1.3.0` | Container image. Set `execution: container` to force an image you built even when Python is installed. |
+| `image` | `ghcr.io/guardianvigil-labs/prufgate:1.4.0` | Container image. Set `execution: container` to force an image you built even when Python is installed. |
 | `job_summary` | `true` | Write a short summary of the run to the job summary page: see [the run summary](#the-run-summary-and-pull-request-comment). |
 | `pr_comment` | `false` | Keep the same summary as one pull request comment, updated on every run. Needs `pull-requests: write`. |
 | `github_checks` | `false` | Publish a separate Check Run with changed-line annotations, coverage and next actions. Requires `checks: write`; fork PR publication is skipped. |
@@ -144,7 +144,7 @@ This repository is a [pre-commit](https://pre-commit.com) hook repository (pre-c
 ```yaml
 repos:
   - repo: https://github.com/GuardianVigil-Labs/Prufgate
-    rev: v1.3.0
+    rev: v1.4.0
     hooks:
       - id: prufgate
       - id: prufgate-full
