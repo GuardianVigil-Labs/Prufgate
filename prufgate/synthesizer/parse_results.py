@@ -99,6 +99,11 @@ class Finding:
     def file_path(self, value: str) -> None:
         self._file_path = value
 
+    @property
+    def raw_file_path(self) -> str:
+        """The path before redaction, for identity only (dedup, scope, baseline); never reported."""
+        return self._file_path
+
     def workspace_file_path(self, workspace_dir: Optional[Path]) -> str:
         """The reported path relative to the workspace when it lies inside it, then redacted.
 
@@ -143,7 +148,8 @@ def read_engine_output(path: Path, partial: bool = False) -> list[dict]:
     return validate_findings(data, tool)
 
 
-def parse_raw_results(raw_dir: Path) -> List[Finding]:
+def parse_raw_results(raw_dir: Path, workspace_dir: Optional[Path] = None) -> List[Finding]:
+    """Every engine's findings, workspace-relative, deduplicated on their real paths."""
     findings: List[Finding] = []
 
     # 1. Engine 1: Production Anti-Fabrication Engine (anti_fabrication.json)
@@ -392,6 +398,8 @@ def parse_raw_results(raw_dir: Path) -> List[Finding]:
                 )
             )
 
+    for f in findings:
+        f.file_path = workspace_relative_path(f.raw_file_path, workspace_dir)
     return deduplicate_findings(findings)
 
 
@@ -456,7 +464,7 @@ def scope_to_change(findings: List[Finding], ranges: Optional[diff_scope.Ranges]
         return findings
     kept = [
         f for f in findings
-        if f.anchored or diff_scope.in_scope(ranges, f.tool, f.rule_id, f.file_path, f.spans, workspace_dir)
+        if f.anchored or diff_scope.in_scope(ranges, f.tool, f.rule_id, f.raw_file_path, f.spans, workspace_dir)
     ]
     if len(kept) < len(findings):
         print(f"prufgate: {len(findings) - len(kept)} finding(s) on lines this change did not touch were not reported "
@@ -502,7 +510,8 @@ def deduplicate_findings(findings: List[Finding]) -> List[Finding]:
     """Deduplicate identical findings reported across overlapping scanners while preserving highest severity."""
     dedup_map: Dict[tuple, Finding] = {}
     for f in findings:
-        norm_file = re.sub(r"^(?:/workspace/|\./|/)+", "", f.file_path or "workspace")
+        # The real path, not the redacted display value: redaction can give two files one name.
+        norm_file = re.sub(r"^(?:/workspace/|\./|/)+", "", f.raw_file_path or "workspace")
         norm_rule = f.rule_id.strip().lower()
         if norm_rule.upper().startswith(("CVE-", "GHSA-")):
             key: tuple = ("vuln_id", norm_rule.upper())
@@ -517,8 +526,8 @@ def deduplicate_findings(findings: List[Finding]) -> List[Finding]:
             dedup_map[key] = f
         else:
             existing = dedup_map[key]
-            if existing.file_path in ("workspace", "unknown") and f.file_path not in ("workspace", "unknown"):
-                existing.file_path = f.file_path
+            if existing.raw_file_path in ("workspace", "unknown") and f.raw_file_path not in ("workspace", "unknown"):
+                existing.file_path = f.raw_file_path
             if SEVERITY_RANK.get(f.severity, 9) < SEVERITY_RANK.get(existing.severity, 9):
                 existing.severity = f.severity
             existing.anchored = existing.anchored or f.anchored or (f.tool in diff_scope.DIFF_ANCHORED_TOOLS)
@@ -561,7 +570,7 @@ def filter_baseline_findings(findings: List[Finding], workspace_dir: Path, ref: 
     entries = _entries(read_baseline(workspace_dir, ref))
     if not entries:
         return findings
-    listed = Matcher(entries, workspace_dir).match_all([(f.file_path, f.rule_id, f.line) for f in findings])
+    listed = Matcher(entries, workspace_dir).match_all([(f.raw_file_path, f.rule_id, f.line) for f in findings])
     return [f for f, hit in zip(findings, listed) if not hit]
 
 
@@ -1097,9 +1106,7 @@ def _main() -> None:
         config_error, cfg = str(exc), PrufGateConfig()
     enable_low = cfg.enable_low_confidence
 
-    findings = parse_raw_results(raw_dir)
-    for f in findings:
-        f.file_path = f.workspace_file_path(workspace_dir)
+    findings = parse_raw_results(raw_dir, workspace_dir)
     try:
         ranges = diff_scope.load(raw_dir / CHANGED_LINES_FILE)
     except (OSError, ValueError, TypeError) as e:
@@ -1148,7 +1155,7 @@ def _main() -> None:
 
     suppressed = load_suppressions(raw_dir)
     if ranges is not None:
-        suppressed = [(f, r) for f, r in suppressed if diff_scope.in_scope(ranges, f.tool, f.rule_id, f.file_path, f.spans, workspace_dir)]
+        suppressed = [(f, r) for f, r in suppressed if diff_scope.in_scope(ranges, f.tool, f.rule_id, f.raw_file_path, f.spans, workspace_dir)]
 
     # Only the configuration in effect (at the base ref) turns it on: it can dismiss
     # findings, so no environment variable or flag a change could set may.

@@ -286,6 +286,31 @@ class PrivacyBoundary(unittest.TestCase):
         self.assertEqual(runs[0]["partialFingerprints"]["primaryLocationLineHash"], line_hashes(source)[2])
         self.assertEqual(runs[0]["partialFingerprints"], runs[1]["partialFingerprints"])
 
+    def test_deep_workspace_findings_in_different_files_are_not_merged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp, "var", "folders", "zz", "q1w2e3r4t5y6u7i8o9p0_a0000gn", "T", "tmp9x8y7z6w")
+            raw = workspace / "reports" / "raw"
+            raw.mkdir(parents=True)
+            alpha, beta = str(workspace / "src" / "alpha.py"), str(workspace / "src" / "beta.py")
+            self.assertEqual(redact(alpha), redact(beta))  # the redacted display value cannot tell them apart
+            (raw / "anti_fabrication.json").write_text(json.dumps([
+                {"rule": "unimplemented-production-stub", "file": path, "line": 4, "text": "x"} for path in (alpha, beta)
+            ]))
+            findings = parse_results.parse_raw_results(raw, workspace)
+        self.assertEqual(sorted(f.file_path for f in findings), ["src/alpha.py", "src/beta.py"])
+
+    def test_true_duplicates_still_merge_across_path_spellings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp, "var", "folders", "zz", "q1w2e3r4t5y6u7i8o9p0_a0000gn", "T", "tmp9x8y7z6w")
+            raw = workspace / "reports" / "raw"
+            raw.mkdir(parents=True)
+            (raw / "anti_fabrication.json").write_text(json.dumps([
+                {"rule": "unimplemented-production-stub", "file": path, "line": 4, "text": "x"}
+                for path in (str(workspace / "src" / "alpha.py"), "src/alpha.py")
+            ]))
+            findings = parse_results.parse_raw_results(raw, workspace)
+        self.assertEqual([f.file_path for f in findings], ["src/alpha.py"])
+
     def test_long_token_path_outside_the_workspace_is_still_redacted(self):
         token = "Fx7q" * 12  # invented, 48 characters
         with tempfile.TemporaryDirectory() as tmp:
