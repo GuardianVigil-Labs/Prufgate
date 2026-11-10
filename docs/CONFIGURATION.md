@@ -176,7 +176,7 @@ Engine 3 reports a diff that adds a new exemption, debt entry or score owner to 
 | `PRUFGATE_BASE_REF` | CLI, gate | Base ref for the changed scope. |
 | `GITHUB_BASE_REF` | CLI, gate | Set by GitHub Actions; `origin/<it>` is used when `PRUFGATE_BASE_REF` is not set. |
 | `WORKSPACE` | gate | The repository to scan (default: the current directory, or `/workspace` in the container). |
-| `PRUFGATE_REPORTS_DIR` | gate | Where reports go (default `WORKSPACE/reports`). |
+| `PRUFGATE_REPORTS_DIR` | gate | Where reports go (default `WORKSPACE/reports`). The gate decides on the folder's resolved location: outside the workspace any folder is allowed; inside it only the default `reports` folder, as a real directory, not a symlink. Known limit: the launcher checks the folder and then writes and cleans it in separate steps, so another process that replaces a folder with a symlink between those steps could redirect them. Run the gate where nothing else changes the workspace while it runs, and do not enable `PRUFGATE_ALLOW_REPO_HOOKS` or `PRUFGATE_ALLOW_RUN_TESTS` outside a sandbox or disposable job. |
 | `TARGET_URL` | gate | Base URL for live BOLA probing. |
 | `BOLA_STATIC_ONLY` | gate | `1` skips live probing even when `TARGET_URL` is set. |
 | `PRUFGATE_TEST_PROBE_TOKEN_A`, `_B` | engine 5 | Bearer tokens for live probing. |
