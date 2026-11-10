@@ -230,7 +230,8 @@ jobs:
 
   marketplace:
     name: Publish to the VS Code Marketplace
-    needs: vscode
+    # Publish only after the GitHub release has attested and attached this exact .vsix.
+    needs: [vscode, release]
     # The Marketplace takes no pre-release versions (1.1.0-rc.1): those ship on the GitHub release only.
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest

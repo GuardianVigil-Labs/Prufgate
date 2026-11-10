@@ -109,7 +109,8 @@ class ReleaseSafety(unittest.TestCase):
     def test_the_marketplace_publishes_the_checked_vsix_behind_its_environment(self):
         build, publish = self.jobs["vscode"], self.jobs["marketplace"]
         self.assertEqual(build["needs"], "checks")
-        self.assertEqual(publish["needs"], "vscode")
+        # Publishing waits for the release job, which attests the same .vsix first.
+        self.assertEqual(publish["needs"], ["vscode", "release"])
         self.assertEqual(publish["environment"]["name"], "vscode-marketplace")
         runs = "\n".join(st.get("run", "") for st in build["steps"])
         self.assertIn('= "${TAG}"', runs)  # the version must equal the tag
